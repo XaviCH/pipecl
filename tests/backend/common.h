@@ -2,6 +2,7 @@
 
 #include <CL/opencl.h>
 #include "debug.hpp"
+#include <config.device.h>
 
 typedef struct {
     cl_context context;
@@ -13,7 +14,15 @@ cl_context_wrapper cl_context_factory() {
     cl_context_wrapper wrapper;
     
     CL_CHECK(clGetPlatformIDs(1, &wrapper.platform_id, NULL));
-    CL_CHECK(clGetDeviceIDs(wrapper.platform_id, CL_DEVICE_TYPE_DEFAULT, 1, &wrapper.device_id, NULL));
+
+    // Choose device
+    const cl_uint num_device_entries = DEVICE_DEVICE_ID + 1;
+    
+    cl_device_id device_entry_ids[num_device_entries];
+    CL_CHECK(clGetDeviceIDs(wrapper.platform_id, CL_DEVICE_TYPE_ALL, num_device_entries, device_entry_ids, NULL));
+
+    wrapper.device_id = device_entry_ids[DEVICE_DEVICE_ID];
+
     wrapper.context = CL_CHECK2(clCreateContext(NULL, 1, &wrapper.device_id, NULL, NULL, &_err));
 
     return wrapper;

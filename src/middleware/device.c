@@ -1772,7 +1772,14 @@ void device_launch_fragment_shader(
     );
 
     size_t lws[2] = {DEVICE_SUB_GROUP_THREADS, DEVICE_FINE_SUB_GROUPS};
-    size_t global_instances = DEVICE_NUM_CORES * (20 / DEVICE_FINE_SUB_GROUPS); // TODO: this could be improve by some heuristic
+
+    size_t global_instances;
+    #if (DEVICE_SUB_GROUP_INTRINSICTS_SUPPORT == 1)
+        global_instances = DEVICE_NUM_CORES;
+    #else
+        global_instances = DEVICE_NUM_CORES * 20; // TODO: this could be improve by some heuristic
+    #endif
+
     size_t gws[2] = {lws[0] * global_instances, lws[1]};
 
     __device_bin_queue_t *bin_queue = __device_get_bin_queue(context->device, bin_queue_id);
