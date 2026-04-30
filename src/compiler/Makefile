@@ -22,6 +22,7 @@ glslc.o: glslc.c $(HEADER_FILES)
 	$(CC) -c $@ $< $(INCLUDES) -DINSTALL_PATH="$(INSTALL_PATH)"
 
 clean:
+	rm -f *.o
 
 clean-all: clean
 	rm -f clc glslc

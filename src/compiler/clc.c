@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
         exit(-1);
     }
 
-    // write binary
+    // get binary
 
     size_t binary_size;
 
@@ -263,6 +263,18 @@ int main(int argc, char** argv) {
     unsigned char* binary = (unsigned char*) malloc(binary_size);
     error = clGetProgramInfo(program, CL_PROGRAM_BINARIES, sizeof(binary), &binary, NULL);
     CHECK(error);
+
+    // validate binary
+
+    cl_int binary_status;
+    cl_program program_tmp = clCreateProgramWithBinary(context, 1, &device_id, &binary_size, &binary, &binary_status, &error);
+    if (error != CL_SUCCESS)
+    {
+        printf("ERROR: Driver could not load the binary.\n");
+        exit(-1);
+    }
+    
+    // output binary
 
     FILE *output_file = fopen(argv[2], "wb");
     fwrite(binary, sizeof(binary[0]), binary_size, output_file);
