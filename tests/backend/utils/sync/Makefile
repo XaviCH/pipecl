@@ -2,7 +2,7 @@ PROJECT_PATH = $(realpath ../../../..)
 
 TESTS_PATH = $(PROJECT_PATH)/tests
 
-PROJECT = sync
+PROJECT = main.exe
 
 SRCS = main.cpp 
 

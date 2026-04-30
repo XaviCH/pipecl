@@ -1,6 +1,6 @@
 PROJECT_PATH ?= $(realpath ../../../..)
 
-PROJECT = sync
+PROJECT = main.exe
 
 SRCS = main.cpp
 
