@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
     // validate binary
 
     cl_int binary_status;
-    cl_program program_tmp = clCreateProgramWithBinary(context, 1, &device_id, &binary_size, &binary, &binary_status, &error);
+    cl_program program_tmp = clCreateProgramWithBinary(context, 1, &device_id, &binary_size, (const unsigned char**) &binary, &binary_status, &error);
     if (error != CL_SUCCESS)
     {
         printf("ERROR: Driver could not load the binary.\n");
