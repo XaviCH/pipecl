@@ -75,7 +75,7 @@ inline bool range_depth_test(ushort z, ushort min_depth, ushort max_depth, uint 
     case DEPTH_FUNC_GREATER:
       return z >  min_depth;
     case DEPTH_FUNC_NOTEQUAL:
-      return z <  min_depth && z > max_depth;
+      return z <  min_depth || z > max_depth;
     case DEPTH_FUNC_GEQUAL:
       return z >= min_depth;
     case DEPTH_FUNC_ALWAYS:

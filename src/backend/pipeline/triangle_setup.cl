@@ -250,7 +250,7 @@ inline int prepareTriangle(
     // AABB falls between samples => cull.
 
     int sampleSize = 1 << (CR_SUBPIXEL_LOG2 - c_samples_log2);
-    int2 bias = (int2)(c_viewport_width, c_viewport_height) << (CR_SUBPIXEL_LOG2 - 1) - (sampleSize >> 1);
+    int2 bias = ((int2)(c_viewport_width, c_viewport_height) << (CR_SUBPIXEL_LOG2 - 1)) - (sampleSize >> 1);
     int2 low = (lo + bias + (sampleSize - 1)) & -sampleSize;
     int2 high = (hi + bias) & -sampleSize;
 

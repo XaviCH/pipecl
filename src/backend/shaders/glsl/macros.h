@@ -142,51 +142,51 @@
  */
 #define SET_VARYING_F1_CHAIN(...) GLUE(SET_VARYING_F1_CHAIN_,COUNT(__VA_ARGS__))(__VA_ARGS__)
 
-#define SET_VARYING_F1_CHAIN_1(a)     a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x;
-#define SET_VARYING_F1_CHAIN_2(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_1(__VA_ARGS__)
-#define SET_VARYING_F1_CHAIN_3(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_2(__VA_ARGS__)
-#define SET_VARYING_F1_CHAIN_4(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_3(__VA_ARGS__)
-#define SET_VARYING_F1_CHAIN_5(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_4(__VA_ARGS__)
-#define SET_VARYING_F1_CHAIN_6(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_5(__VA_ARGS__)
-#define SET_VARYING_F1_CHAIN_7(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_6(__VA_ARGS__)
-#define SET_VARYING_F1_CHAIN_8(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_7(__VA_ARGS__)
-#define SET_VARYING_F1_CHAIN_9(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_8(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_1(a)     a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x;
+#define SET_VARYING_F1_CHAIN_2(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_1(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_3(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_2(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_4(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_3(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_5(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_4(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_6(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_5(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_7(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_6(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_8(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_7(__VA_ARGS__)
+#define SET_VARYING_F1_CHAIN_9(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).x; SET_VARYING_F1_CHAIN_8(__VA_ARGS__)
 
 #define SET_VARYING_F2_CHAIN(...) GLUE(SET_VARYING_F2_CHAIN_,COUNT(__VA_ARGS__))(__VA_ARGS__)
 
-#define SET_VARYING_F2_CHAIN_1(a)     a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy;
-#define SET_VARYING_F2_CHAIN_2(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_1(__VA_ARGS__)
-#define SET_VARYING_F2_CHAIN_3(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_2(__VA_ARGS__)
-#define SET_VARYING_F2_CHAIN_4(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_3(__VA_ARGS__)
-#define SET_VARYING_F2_CHAIN_5(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_4(__VA_ARGS__)
-#define SET_VARYING_F2_CHAIN_6(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_5(__VA_ARGS__)
-#define SET_VARYING_F2_CHAIN_7(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_6(__VA_ARGS__)
-#define SET_VARYING_F2_CHAIN_8(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_7(__VA_ARGS__)
-#define SET_VARYING_F2_CHAIN_9(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_8(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_1(a)     a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy;
+#define SET_VARYING_F2_CHAIN_2(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_1(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_3(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_2(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_4(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_3(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_5(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_4(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_6(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_5(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_7(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_6(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_8(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_7(__VA_ARGS__)
+#define SET_VARYING_F2_CHAIN_9(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xy; SET_VARYING_F2_CHAIN_8(__VA_ARGS__)
 
 #define SET_VARYING_F3_CHAIN(...) GLUE(SET_VARYING_F3_CHAIN_,COUNT(__VA_ARGS__))(__VA_ARGS__)
 
-#define SET_VARYING_F3_CHAIN_1(a)     a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz;
-#define SET_VARYING_F3_CHAIN_2(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_1(__VA_ARGS__)
-#define SET_VARYING_F3_CHAIN_3(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_2(__VA_ARGS__)
-#define SET_VARYING_F3_CHAIN_4(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_3(__VA_ARGS__)
-#define SET_VARYING_F3_CHAIN_5(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_4(__VA_ARGS__)
-#define SET_VARYING_F3_CHAIN_6(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_5(__VA_ARGS__)
-#define SET_VARYING_F3_CHAIN_7(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_6(__VA_ARGS__)
-#define SET_VARYING_F3_CHAIN_8(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_7(__VA_ARGS__)
-#define SET_VARYING_F3_CHAIN_9(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_8(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_1(a)     a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz;
+#define SET_VARYING_F3_CHAIN_2(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_1(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_3(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_2(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_4(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_3(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_5(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_4(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_6(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_5(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_7(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_6(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_8(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_7(__VA_ARGS__)
+#define SET_VARYING_F3_CHAIN_9(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer).xyz; SET_VARYING_F3_CHAIN_8(__VA_ARGS__)
 
 #define SET_VARYING_CHAIN(...) GLUE(SET_VARYING_CHAIN_,COUNT(__VA_ARGS__))(__VA_ARGS__)
 
-#define SET_VARYING_CHAIN_1(a)     a = interpolate_varying(varying, vert_idx, bary, vertex_buffer);
-#define SET_VARYING_CHAIN_2(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_1(__VA_ARGS__)
-#define SET_VARYING_CHAIN_3(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_2(__VA_ARGS__)
-#define SET_VARYING_CHAIN_4(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_3(__VA_ARGS__)
-#define SET_VARYING_CHAIN_5(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_4(__VA_ARGS__)
-#define SET_VARYING_CHAIN_6(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_5(__VA_ARGS__)
-#define SET_VARYING_CHAIN_7(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_6(__VA_ARGS__)
-#define SET_VARYING_CHAIN_8(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_7(__VA_ARGS__)
-#define SET_VARYING_CHAIN_9(a,...) a = interpolate_varying(varying, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_8(__VA_ARGS__)
+#define SET_VARYING_CHAIN_1(a)     a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer);
+#define SET_VARYING_CHAIN_2(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_1(__VA_ARGS__)
+#define SET_VARYING_CHAIN_3(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_2(__VA_ARGS__)
+#define SET_VARYING_CHAIN_4(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_3(__VA_ARGS__)
+#define SET_VARYING_CHAIN_5(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_4(__VA_ARGS__)
+#define SET_VARYING_CHAIN_6(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_5(__VA_ARGS__)
+#define SET_VARYING_CHAIN_7(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_6(__VA_ARGS__)
+#define SET_VARYING_CHAIN_8(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_7(__VA_ARGS__)
+#define SET_VARYING_CHAIN_9(a,...) a = interpolate_varying(varying++, vert_idx, bary, vertex_buffer); SET_VARYING_CHAIN_8(__VA_ARGS__)
 /**
  * Struct setters 
  */

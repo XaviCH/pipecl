@@ -69,7 +69,7 @@ inline void apply_blend_alpha_func(uint func, const float4* src, const float4* d
       out->w = 0;
       break;
     case BLEND_ONE:
-      out->w = 0;
+      out->w = 1;
       break;
     case BLEND_SRC_COLOR:
       out->w = src->w;
@@ -129,13 +129,7 @@ inline float4 uint_to_float4(const uint color) {
 }
 
 static inline uint float4_to_uint(const float4 color) {
-  float4 tmp = clamp(color, 0.f, 1.f);
-
-  return 
-    (uint)(tmp.x * 255.f) <<  0 |
-    (uint)(tmp.y * 255.f) <<  8 |
-    (uint)(tmp.z * 255.f) << 16 |
-    (uint)(tmp.w * 255.f) << 24 ;
+  return as_uint(convert_uchar4_sat_rte(color * 255.f));
 }
 
 inline uint blend(
@@ -155,9 +149,9 @@ inline uint blend(
   dstColor = uint_to_float4(dst);
   conColor = uint_to_float4(c_blending_color);
 
-  apply_blend_color_func(blending_func_alpha_src, &srcColor, &dstColor, &conColor, &wsrcColor);
+  apply_blend_color_func(blending_func_color_src, &srcColor, &dstColor, &conColor, &wsrcColor);
   apply_blend_alpha_func(blending_func_alpha_src, &srcColor, &dstColor, &conColor, &wsrcColor);
-  apply_blend_color_func(blending_func_alpha_dst, &srcColor, &dstColor, &conColor, &wdstColor);
+  apply_blend_color_func(blending_func_color_dst, &srcColor, &dstColor, &conColor, &wdstColor);
   apply_blend_alpha_func(blending_func_alpha_dst, &srcColor, &dstColor, &conColor, &wdstColor);
 
   switch (blending_eq_color) {

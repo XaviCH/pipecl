@@ -24,7 +24,7 @@ kernel void readnpixels(
   int2 out_pos = pos;
   if (swap_y_axis)
   {
-    out_pos.y = size.y - out_pos.y; 
+    out_pos.y = size.y - 1 - out_pos.y;
   }
   
   write_2d_texture_buffer(out, out_pos, size, out_mode, color);
