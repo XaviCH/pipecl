@@ -120,13 +120,13 @@ inline cl_uint get_th_misc_primitive_config(const triangle_header_misc_t th_misc
 inline cl_ushort get_th_misc_zmax(const triangle_header_misc_t th_misc)
 {
     const cl_uint LOST_BITS = 16 - (TH_MISC_PRIMITIVE_CONFIG_POSITION - TH_MISC_ZMAX_POSITION);
-    cl_uint depth = (th_misc.misc >> (TH_MISC_ZMAX_POSITION - LOST_BITS)) | (LOST_BITS - 1); // bound to upper
+    cl_uint depth = (th_misc.misc >> (TH_MISC_ZMAX_POSITION - LOST_BITS)) | ((1u << LOST_BITS) - 1); // bound to upper
     return depth & 0xFFFFu;
 }
 inline cl_ushort get_th_misc_zmin(const triangle_header_misc_t th_misc)
 {
     const cl_uint LOST_BITS = 16 - (TH_MISC_ZMAX_POSITION - TH_MISC_ZMIN_POSITION);
-    cl_uint depth = (th_misc.misc >> (TH_MISC_ZMIN_POSITION - LOST_BITS)) & ~(LOST_BITS - 1); // bound to lower
+    cl_uint depth = (th_misc.misc >> (TH_MISC_ZMIN_POSITION - LOST_BITS)) & ~((1u << LOST_BITS) - 1); // bound to lower
     return depth & 0xFFFFu;
 }
 
@@ -144,14 +144,14 @@ inline void set_th_misc_zmax(triangle_header_misc_t *th_misc, cl_ushort zmax)
 {
     const cl_uint VALID_BITS = (TH_MISC_PRIMITIVE_CONFIG_POSITION - TH_MISC_ZMAX_POSITION);
     const cl_uint LOST_BITS = 16 - VALID_BITS;
-    th_misc->misc &= ~(VALID_BITS << TH_MISC_ZMAX_POSITION);
+    th_misc->misc &= ~(((1u << VALID_BITS) - 1) << TH_MISC_ZMAX_POSITION);
     th_misc->misc |= ((cl_uint)zmax >> LOST_BITS) << TH_MISC_ZMAX_POSITION;
 };
 inline void set_th_misc_zmin(triangle_header_misc_t *th_misc, cl_ushort zmin)
 {
     const cl_uint VALID_BITS = (TH_MISC_ZMAX_POSITION - TH_MISC_ZMIN_POSITION);
     const cl_uint LOST_BITS = 16 - VALID_BITS;
-    th_misc->misc &= ~(VALID_BITS << TH_MISC_ZMIN_POSITION);
+    th_misc->misc &= ~(((1u << VALID_BITS) - 1) << TH_MISC_ZMIN_POSITION);
     th_misc->misc |= ((cl_uint)zmin >> LOST_BITS) << TH_MISC_ZMIN_POSITION;
 };
 

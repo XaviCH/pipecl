@@ -30,7 +30,7 @@ static inline void set_bit_sub_group_mask(sub_group_mask_t* sub_group_mask, uint
     #else
     {
         ulong* pointer = (ulong*)sub_group_mask + (position > 63);
-        pointer->mask |= 1ul << (position % 64);
+        *pointer |= 1ul << (position % 64);
     }
     #endif
 }
@@ -170,7 +170,7 @@ static inline bool get_bit_sub_group_mask(sub_group_mask_t sub_group_mask, uint 
     #else
     {
         ulong* pointer = (ulong*)(&sub_group_mask) + (position > 63);
-        bit = (pointer->mask & (1ul << (position % 64))) != 0;
+        bit = ((*pointer) & (1ul << (position % 64))) != 0;
     }
     #endif
 
@@ -183,17 +183,17 @@ static inline sub_group_mask_t atomic_or_sub_group_mask(local volatile sub_group
 
     #if (DEVICE_SUB_GROUP_THREADS <= 8)
     {
-        uint align_offset = (uint)value & 0x3u; 
+        uint align_offset = (uint)(uintptr_t)address & 0x3u;
         uint aligned_mask = mask.mask << align_offset*8;
-        uint* aligned_address = (uint*)(value - align_offset);
+        local volatile uint* aligned_address = (local volatile uint*)((local volatile uchar*)address - align_offset);
         uint result = atomic_or(aligned_address, aligned_mask);
-        atomic_mask.mask = result >> align_offset*8; 
+        atomic_mask.mask = result >> align_offset*8;
     }
     #elif (DEVICE_SUB_GROUP_THREADS <= 16)
     {
-        uint align_offset = ((uint)value >> 1) & 0x1u; 
+        uint align_offset = ((uint)(uintptr_t)address >> 1) & 0x1u;
         uint aligned_mask = mask.mask << align_offset*16;
-        uint* aligned_address = (uint*)(value - align_offset);
+        local volatile uint* aligned_address = (local volatile uint*)((local volatile uchar*)address - (align_offset << 1));
         uint result = atomic_or(aligned_address, aligned_mask);
         atomic_mask.mask = result >> align_offset*16;
     }

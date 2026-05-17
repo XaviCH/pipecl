@@ -27,18 +27,18 @@ void write_colorbuffer_channels(
         (clear_write_values >> 24) & 0xFFu
     };
 
-    // Required read
+    // Required read (preserve channels that aren't being cleared)
     if (enabled_color_channel_mask != CLEAR_ENABLED_COLOR_CHANNEL_MASK) {
         uint4 buffer_value;
         #ifdef DEVICE_RW_IMAGE_ENABLED
             buffer_value = read_imageui(colorbuffer, (int2){x, y});
         #else
-            uint compressed_buffer_value = ((global uchar*)colorbuffer)[x + y*buffer_width];
+            uint packed = read_colorbuffer(colorbuffer, (int2){x, y}, (uint2){buffer_width, 0}, colorbuffer_type);
             buffer_value = (uint4){
-                (compressed_buffer_value >>  0) & 0xFFu,
-                (compressed_buffer_value >>  8) & 0xFFu,
-                (compressed_buffer_value >> 16) & 0xFFu,
-                (compressed_buffer_value >> 24) & 0xFFu
+                (packed >>  0) & 0xFFu,
+                (packed >>  8) & 0xFFu,
+                (packed >> 16) & 0xFFu,
+                (packed >> 24) & 0xFFu
             };
         #endif
 
@@ -53,11 +53,11 @@ void write_colorbuffer_channels(
     #ifdef DEVICE_RW_IMAGE_ENABLED
         write_imageui(colorbuffer, (int2){x, y}, color_value);
     #else
-        ((global uint*)colorbuffer)[x + y*buffer_width] = 
+        write_colorbuffer(colorbuffer, (int2){x, y}, (uint2){buffer_width, 0}, colorbuffer_type,
             color_value.x <<  0 |
             color_value.y <<  8 |
             color_value.z << 16 |
-            color_value.w << 24 ;
+            color_value.w << 24);
     #endif
 }
 

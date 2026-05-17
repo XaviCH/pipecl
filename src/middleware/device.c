@@ -1635,10 +1635,8 @@ void device_launch_bin_dispatch(
     {
         cl_int bin_segs = 0;
         cl_int bin_total[CR_MAXBINS_SQR][CR_BIN_STREAMS_SIZE];
-        cl_uchar *tri_subtris = (cl_uchar*) malloc(sizeof(cl_uchar[num_triangles]));
         CL_CHECK(clEnqueueReadBuffer(queue, context->a_num_bin_segs.mem, CL_TRUE, 0, sizeof(bin_segs), &bin_segs, 0, NULL, NULL));
         CL_CHECK(clEnqueueReadBuffer(queue, context->g_bin_total, CL_TRUE, 0, sizeof(bin_total), &bin_total, 0, NULL, NULL));
-        // CL_CHECK(clEnqueueReadBuffer(queue, context->g_tri_subtris, CL_TRUE, 0, sizeof(cl_uchar[num_triangles]), tri_subtris, 0, NULL, NULL));
         printf("bin_segs=%d, max_bin_segs=%ld\n", bin_segs, __device_get_max_number_bin_segments());
 
         int sum_bin_total = 0;
@@ -1651,17 +1649,11 @@ void device_launch_bin_dispatch(
             sum_bin_total += total;
         }
         printf("sum(bin_total)=%d\n", sum_bin_total);
-        int sum_tri_subtris = 0;
-        for(size_t i=0; i<num_triangles; ++i) {
-            sum_tri_subtris += tri_subtris[i] & 0x7; // mask out the flag bit
-        }
-        // printf("sum(tri_subtris)=%d\n", sum_tri_subtris);
-        if (bin_segs > __device_get_max_number_bin_segments()) 
+        if (bin_segs > __device_get_max_number_bin_segments())
         {
             printf("ERROR: bin segs > max_bin_segs\n");
             exit(1);
         }
-
     }
     #endif
 
@@ -1858,7 +1850,7 @@ void device_launch_clear_framebuffer(
     CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &device->textures[colorbuffer_id].mem));
     CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &device->textures[depthbuffer_id].mem));
     CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &device->textures[stencilbuffer_id].mem));
-    #ifndef DEVICE_IMAGE_ENABLED
+    #ifndef DEVICE_RW_IMAGE_ENABLED
     {
         CL_CHECK(clSetKernelArg(kernel, count++, sizeof(c_colorbuffer_mode), &c_colorbuffer_mode));
         CL_CHECK(clSetKernelArg(kernel, count++, sizeof(c_viewport_width), &c_viewport_width));
