@@ -108,7 +108,7 @@ static inline uint get_lod_offset(texture_size_t size, uint lod)
 
     for(uint level = 0; level < lod; ++level)
     {
-        offset += size.x + size.y;
+        offset += size.x * size.y;
         size /= (texture_size_t)2;
     }
 
@@ -191,7 +191,7 @@ static inline float4 read_2d_bufferf(
 
     // generate image coordanates
     int2 floor_coord = convert_int2_rtz(lod_ucoord);
-    int2 ceil_coord = min(convert_int2_rtp(lod_ucoord), convert_int2(size));
+    int2 ceil_coord  = min(convert_int2_rtp(lod_ucoord), convert_int2(size) - 1);
 
     float2 frac_coord   = lod_ucoord - floor(lod_ucoord);
 
@@ -405,8 +405,34 @@ static inline float4 read_imagef_gl(
     }
 
     int mode = get_texture_data_mode(texture_data);
-    
-    return uint4_to_float4_color(read_imageui(TEXTURE_UNIT_ARG(texture), coord, lod), mode);
+
+    // SW-supported formats are stored in images with a layout that does NOT
+    // match the per-channel convention `uint4_to_float4_color` expects:
+    //   TEX_RGBA4   → CL_RG  / CL_UNORM_INT8  → read_imageui = {lo_byte, hi_byte, _, _}
+    //   TEX_RGB5_A1 → CL_R   / CL_UNORM_INT16 → read_imageui = {packed_u16, _, _, _}
+    // Unpack per-channel from that layout before normalizing.
+    uint4 raw = read_imageui(TEXTURE_UNIT_ARG(texture), coord, lod);
+    uint4 channels = raw;
+    switch (mode)
+    {
+        case TEX_RGBA4:
+            channels.x =  raw.x       & 0xFu;
+            channels.y = (raw.x >> 4) & 0xFu;
+            channels.z =  raw.y       & 0xFu;
+            channels.w = (raw.y >> 4) & 0xFu;
+            break;
+        case TEX_RGB5_A1:
+            channels.x =  raw.x        & 0x1Fu;
+            channels.y = (raw.x >>  5) & 0x1Fu;
+            channels.z = (raw.x >> 10) & 0x1Fu;
+            channels.w = (raw.x >> 15) & 0x1u;
+            break;
+        default:
+            // No other mode reaches this branch (software_support returns
+            // true only for RGBA4 / RGB5_A1); keep raw as a safe fallback.
+            break;
+    }
+    return uint4_to_float4_color(channels, mode);
 
     #endif
 

@@ -111,38 +111,18 @@ static inline float4 uint4_to_float4_color(uint4 color, int mode)
         case TEX_RGB565:
             colorf.xyz = convert_float3(color.xyz) / (float3){0x1Fu, 0x3Fu, 0x1Fu}; 
             break;
-
-        // SW supported conversions
         case TEX_RGBA4:
-            {
-                uint4 tmp = 
-                {
-                    (color.x >> 0) & 0xFu,
-                    (color.x >> 4) & 0xFu,
-                    (color.y >> 0) & 0xFu,
-                    (color.y >> 4) & 0xFu,
-                };
-                colorf = convert_float4(tmp) / 0xFu; 
-            }
+            colorf = convert_float4(color) / 0xFu;
             break;
         case TEX_RGB5_A1:
-            {
-                uint4 tmp = 
-                {
-                    (color.x >>  0) & 0x1Fu,
-                    (color.x >>  5) & 0x1Fu,
-                    (color.x >> 10) & 0x1Fu,
-                    (color.x >> 15) & 0x1u,
-                };
-                colorf = convert_float4(tmp) / (float4){0x1Fu, 0x1Fu, 0x1Fu, 0x1u}; 
-            }
+            colorf = convert_float4(color) / (float4){0x1Fu, 0x1Fu, 0x1Fu, 0x1u};
             break;
     }
 
     return colorf;
 }
 
-static inline float4 read_vertex_buffer(ro_vertex_buffer_t vertex_buffer, uint index) { 
+static inline float4 read_vertex_buffer(ro_vertex_buffer_t vertex_buffer, uint index) {
     float4 value;
 
     #ifdef DEVICE_IMAGE_ENABLED

@@ -290,7 +290,8 @@ void bin_raster(
             #endif
             
             // count per-bin contributions
-            s_over_total = 0; // overflow counter
+            if (local_id == 0)
+                s_over_total = 0; // overflow counter
 
             // ensure that out masks are done
             barrier(CLK_LOCAL_MEM_FENCE);

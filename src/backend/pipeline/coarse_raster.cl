@@ -457,6 +457,7 @@ void coarse_raster(
 
     s_tile_emit_prefix_sum[0] = 0;
     s_tile_alloc_prefix_sum[0] = 0;
+    s_first_alloc_seg = 0;
 
     // Sort bins in descending order of triangle count.
 
@@ -821,8 +822,8 @@ void coarse_raster(
 
             int ofs, tile_x, tile_y;
             bool force;
-            
-            ofs = s_tile_stream_curr_ofs[tile_in_bin];
+
+            ofs = active ? s_tile_stream_curr_ofs[tile_in_bin] : 0;
             tile_x = tile_in_bin & (CR_BIN_SIZE - 1);
             tile_y = tile_in_bin >> CR_BIN_LOG2;
             force = (c_deferred_clear && tile_x <= max_tile_x_in_bin && tile_y <= max_tile_y_in_bin);

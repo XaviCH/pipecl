@@ -90,16 +90,19 @@ static inline sub_group_mask_t shift_right_sub_group_mask(sub_group_mask_t sub_g
 }
 
 
-static inline sub_group_mask_t get_sub_group_mask_ones_lt(uint position) {
+/** 
+ * @param lane Lane index in the sub-group; must be < get_sub_group_size().
+ */
+static inline sub_group_mask_t get_sub_group_mask_ones_lt(uint lane) {
     sub_group_mask_t sub_group_mask;
 
     #if (DEVICE_SUB_GROUP_THREADS <= 64)
-        sub_group_mask.mask = (1ul << position) - 1; 
+        sub_group_mask.mask = (1ul << lane) - 1;
     #else
     {
         ulong* pointer = &sub_group_mask.mask;
-        pointer[0] = position > 63 ? ULONG_MAX : (1ul << position) - 1;
-        pointer[1] = position > 63 ? (1ul << (position - 64)) - 1 : 0;
+        pointer[0] = lane >= 64 ? ULONG_MAX : (1ul << lane) - 1;
+        pointer[1] = lane >= 64 ? (1ul << (lane - 64)) - 1 : 0;
     }
     #endif
 

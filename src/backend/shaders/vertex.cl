@@ -82,11 +82,11 @@ static inline float4 gl_get_vertex_attribute_from_pointer(
         default:
             return result;
         case VERTEX_ATTRIBUTE_TYPE_BYTE:
-            return result / (float4){CHAR_MAX+1, CHAR_MAX+1, CHAR_MAX+1, CHAR_MAX+1};
+            return max(result / (float4){CHAR_MAX, CHAR_MAX, CHAR_MAX, CHAR_MAX}, (float4){-1.0f,-1.0f,-1.0f,-1.0f});
         case VERTEX_ATTRIBUTE_TYPE_UNSIGNED_BYTE:
             return result / (float4){UCHAR_MAX, UCHAR_MAX, UCHAR_MAX, UCHAR_MAX};
         case VERTEX_ATTRIBUTE_TYPE_SHORT:
-            return result / (float4){SHRT_MAX+1, SHRT_MAX+1, SHRT_MAX+1, SHRT_MAX+1}; // TODO: check this
+            return max(result / (float4){SHRT_MAX, SHRT_MAX, SHRT_MAX, SHRT_MAX}, (float4){-1.0f,-1.0f,-1.0f,-1.0f});
         case VERTEX_ATTRIBUTE_TYPE_UNSIGNED_SHORT:
             return result / (float4){USHRT_MAX, USHRT_MAX, USHRT_MAX, USHRT_MAX};
     }

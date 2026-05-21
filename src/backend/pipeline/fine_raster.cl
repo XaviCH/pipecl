@@ -29,15 +29,13 @@
 //------------------------------------------------------------------------
 // Fragment Shader Interface Wrapper.
 //------------------------------------------------------------------------
-
-
-inline float3 compute_barys(
+static inline float3 compute_barys(
     const int3* wpleq, const int3* upleq, const int3* vpleq,
     int sample_x, int sample_y)
 {
-    float w = 1.0f / (float){wpleq->x * sample_x + wpleq->y * sample_y + wpleq->z};
-    float u = w * (float){upleq->x * sample_x + upleq->y * sample_y + upleq->z};
-    float v = w * (float){vpleq->x * sample_x + vpleq->y * sample_y + vpleq->z};
+    float w = 1.0f / (float)(wpleq->x * sample_x + wpleq->y * sample_y + wpleq->z);
+    float u = w * (float)(upleq->x * sample_x + upleq->y * sample_y + upleq->z);
+    float v = w * (float)(vpleq->x * sample_x + vpleq->y * sample_y + vpleq->z);
     return (float3){1.0f - u - v, u, v};
 }
 
@@ -710,7 +708,7 @@ void fine_raster_single_sample(
     for (;;)
     {
         // each warp pick a tile
-        int active_idx;
+        int active_idx = 0; // silence UB, will be overwritten by lane 0 before use
         if (get_local_id(0) == 0)
             active_idx = atomic_add(a_fine_counter, 1);
 

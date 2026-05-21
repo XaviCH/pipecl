@@ -714,12 +714,12 @@ void orch_write_fragment_data(
 
     if (framebuffer->loaded_configs == TRIANGLE_PRIMITIVE_CONFIGS)
     {
-        __orch_attach_new_context(orch, framebuffer, 0);
+        context = __orch_attach_new_context(orch, framebuffer, 0);
     }
 
     device_write_fragment_uniform(context, framebuffer->loaded_configs, uniform_data);
     device_write_rop_config(context, framebuffer->loaded_configs, &config);
-    
+
     framebuffer->loaded_configs += 1;
 }
 

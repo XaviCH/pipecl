@@ -40,10 +40,10 @@ static inline void local_1dim_barrier(cl_mem_fence_flags flags)
     #define GEN_LOCAL_1DIM_BROADCAST_IMPL(_TYPE) \
         static inline _TYPE __attribute__((overloadable)) local_1dim_broadcast(_TYPE value, uint id, local volatile _TYPE* l_temp) \
         { \
-            local volatile _TYPE *ptr = &l_temp[get_local_id(1)*get_local_size(0)]; \
-            ptr[get_local_id(0)] = value; \
+            local volatile _TYPE *slot = &l_temp[get_local_id(1) * get_local_size(0)]; \
+            if (get_local_id(0) == id) *slot = value; \
             local_1dim_barrier(CLK_LOCAL_MEM_FENCE); \
-            uint result = ptr[id]; \
+            _TYPE result = *slot; \
             barrier(CLK_LOCAL_MEM_FENCE); \
             return result; \
         }
@@ -98,7 +98,6 @@ static inline uint __attribute__((overloadable)) local_1dim_scan_inclusive_add_b
     #else
     {
         result = local_1dim_scan_inclusive_add(value ? 1u : 0u, l_temp);
-        barrier(CLK_LOCAL_MEM_FENCE); // make sure that all threads have the correct result before any thread can read it
     }
     #endif
 
@@ -199,16 +198,16 @@ static inline uint __attribute__((overloadable)) local_scan_inclusive_min(uint v
 GEN_LOCAL_1DIM_REDUCE_IMPL(min, uint)
 GEN_LOCAL_1DIM_REDUCE_IMPL(max, uint)
 
-static inline uint __attribute__((overloadable)) local_reduce_min(uint value, local volatile uint* l_temp) 
+static inline uint __attribute__((overloadable)) local_reduce_min(uint value, local volatile uint* l_temp)
 {
     uint result_1dim = local_1dim_reduce_min(value, l_temp);
 
-    l_temp[get_local_id(1)] = result_1dim;
+    if (get_local_id(0) == 0) l_temp[get_local_id(1)] = result_1dim;
 
     barrier(CLK_LOCAL_MEM_FENCE); // ensure write
 
     uint tmp = UINT_MAX;
-    if (get_local_id(0) < get_local_size(1)) 
+    if (get_local_id(0) < get_local_size(1))
         tmp = l_temp[get_local_id(0)];
 
     barrier(CLK_LOCAL_MEM_FENCE); // ensure read
@@ -236,7 +235,7 @@ static inline uint __attribute__((overloadable)) local_reduce_min(uint value, lo
             clear_sub_group_mask(&tmp);
             if (value) set_bit_sub_group_mask(&tmp, get_local_id(0));
 
-            clear_sub_group_mask(&l_temp[get_local_id(1)]);
+            if (get_local_id(0) == 0) clear_sub_group_mask(&l_temp[get_local_id(1)]);
 
             local_1dim_barrier(CLK_LOCAL_MEM_FENCE);
 
