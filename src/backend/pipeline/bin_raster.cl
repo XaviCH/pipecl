@@ -254,21 +254,21 @@ void bin_raster(
                         d02x += width * d02y;
                         d12x += width * d12y;
 
-                        local volatile sub_group_mask_t* currPtr = &s_out_mask[get_local_id(1)][lox + loy * c_width_bins];
-                        local volatile sub_group_mask_t* skipPtr = &s_out_mask[get_local_id(1)][(hix + 1) + loy * c_width_bins];
-                        local volatile sub_group_mask_t* endPtr  = &s_out_mask[get_local_id(1)][lox + (hiy + 1) * c_width_bins];
+                        int currBin = lox + loy * c_width_bins;
+                        int skipBin = (hix + 1) + loy * c_width_bins;
+                        int endBin  = lox + (hiy + 1) * c_width_bins;
                         int stride  = c_width_bins;
-                        int ptrYInc = stride - width;
+                        int binYInc = stride - width;
 
                         do
                         {
                             if (b01 >= 0 && b02 >= 0 && b12 >= 0)
-                                atomic_or_sub_group_mask(currPtr, bit);
-                            currPtr += 1, b01 -= d01y, b02 += d02y, b12 -= d12y;
-                            if (currPtr == skipPtr)
-                                currPtr += ptrYInc, b01 += d01x, b02 -= d02x, b12 += d12x, skipPtr += stride;
+                                atomic_or_sub_group_mask(&s_out_mask[get_local_id(1)][currBin], bit);
+                            currBin += 1, b01 -= d01y, b02 += d02y, b12 -= d12y;
+                            if (currBin == skipBin)
+                                currBin += binYInc, b01 += d01x, b02 -= d02x, b12 += d12x, skipBin += stride;
                         }
-                        while (currPtr != endPtr);
+                        while (currBin != endBin);
                     }
                 }
 

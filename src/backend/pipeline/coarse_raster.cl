@@ -66,12 +66,12 @@ static inline void local_emit_triangle_mask(
         area = sizex * sizey;
     }
 
-    local sub_group_mask_t* curr_ptr;
+    int curr_idx;
     int ptr_y_inc;
     sub_group_mask_t mask_bit;
     {
         clear_sub_group_mask(&mask_bit);
-        curr_ptr = &s_warp_emit_mask[get_local_id(1)][lox + (loy << CR_BIN_LOG2)];
+        curr_idx = lox + (loy << CR_BIN_LOG2);
         ptr_y_inc = CR_BIN_SIZE - sizex;
         set_bit_sub_group_mask(&mask_bit, get_local_id(0));
     }
@@ -79,10 +79,10 @@ static inline void local_emit_triangle_mask(
     
     if (sizex <= 2 && sizey <= 2)
     {
-        atomic_or_sub_group_mask(curr_ptr, mask_bit);
-        if (sizex == 2) atomic_or_sub_group_mask(curr_ptr + 1, mask_bit);
-        if (sizey == 2) atomic_or_sub_group_mask(curr_ptr + CR_BIN_SIZE, mask_bit);
-        if (sizex == 2 && sizey == 2) atomic_or_sub_group_mask(curr_ptr + 1 + CR_BIN_SIZE, mask_bit);
+        atomic_or_sub_group_mask(&s_warp_emit_mask[get_local_id(1)][curr_idx], mask_bit);
+        if (sizex == 2) atomic_or_sub_group_mask(&s_warp_emit_mask[get_local_id(1)][curr_idx + 1], mask_bit);
+        if (sizey == 2) atomic_or_sub_group_mask(&s_warp_emit_mask[get_local_id(1)][curr_idx + CR_BIN_SIZE], mask_bit);
+        if (sizex == 2 && sizey == 2) atomic_or_sub_group_mask(&s_warp_emit_mask[get_local_id(1)][curr_idx + 1 + CR_BIN_SIZE], mask_bit);
         return;
     }
     
@@ -107,17 +107,17 @@ static inline void local_emit_triangle_mask(
     }
 
     {
-        local sub_group_mask_t* skip_ptr = curr_ptr + (sizex);
-        local sub_group_mask_t* end_ptr  = curr_ptr + (sizey << CR_BIN_LOG2);
+        int skip_idx = curr_idx + (sizex);
+        int end_idx  = curr_idx + (sizey << CR_BIN_LOG2);
         do
         {
             if (b01 >= 0 && b02 >= 0 && b12 >= 0)
-                atomic_or_sub_group_mask(curr_ptr, mask_bit);
-            curr_ptr += 1, b01 -= d01y, b02 += d02y, b12 -= d12y;
-            if (curr_ptr == skip_ptr)
-                curr_ptr += ptr_y_inc, b01 += d01x, b02 -= d02x, b12 += d12x, skip_ptr += CR_BIN_SIZE;
+                atomic_or_sub_group_mask(&s_warp_emit_mask[get_local_id(1)][curr_idx], mask_bit);
+            curr_idx += 1, b01 -= d01y, b02 += d02y, b12 -= d12y;
+            if (curr_idx == skip_idx)
+                curr_idx += ptr_y_inc, b01 += d01x, b02 -= d02x, b12 += d12x, skip_idx += CR_BIN_SIZE;
         }
-        while (curr_ptr != end_ptr);
+        while (curr_idx != end_idx);
     }
 
 }
