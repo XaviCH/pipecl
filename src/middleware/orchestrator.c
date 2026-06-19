@@ -2,13 +2,19 @@
 
 #include <stdio.h>
 
-#define NOT_IMPLEMENTED \
+#define ERROR(ERR, MSG, ...) \
     { \
-        printf("Funtion %s at %s:%d is not implemented.\n", __func__, __FILE__, __LINE__); \
+        fprintf(stderr, "ERROR: %s at %s:%d. " MSG "\n", ERR, __FILE__, __LINE__, ##__VA_ARGS__); \
         exit(1); \
     }
 
-// TODO: circular dependency, maybe change behaviour 
+#define NOT_IMPLEMENTED \
+    { \
+        fprintf(stderr, "Function %s at %s:%d is not implemented.\n", __func__, __FILE__, __LINE__); \
+        exit(1); \
+    }
+
+// TODO: circular dependency, maybe change behaviour
 static device_context_t* __orch_attach_new_context(orch_handler_t* orch, orch_framebuffer_handler_t* framebuffer, int move_fragment_data);
 
 
@@ -356,14 +362,12 @@ static void __orch_draw_vertices(
 
         if (flush_context_reason == TRIANGLE_BUFFER_CAPACITY && num_triangles > DEVICE_MAX_NUMBER_TRIANGLES)
         {
-            printf("ERROR: Do not supported triangle size draw call. num triangles => %ld > %ld\n", num_triangles, (size_t) DEVICE_MAX_NUMBER_TRIANGLES);
-            exit(1);
+            ERROR(-1, "Do not supported triangle size draw call. num triangles => %ld > %ld", num_triangles, (size_t) DEVICE_MAX_NUMBER_TRIANGLES);
         }
 
         if (flush_context_reason == VERTEX_BUFFER_CAPACITY && num_vertices > DEVICE_VERTICES_SIZE)
         {
-            printf("ERROR: Do not supported vertices size draw call. num vertices => %ld > %ld\n", num_vertices, (size_t) DEVICE_VERTICES_SIZE);
-            exit(1);
+            ERROR(-1, "Do not supported vertices size draw call. num vertices => %ld > %ld", num_vertices, (size_t) DEVICE_VERTICES_SIZE);
         }
     }
 
@@ -461,7 +465,7 @@ void orch_init(orch_handler_t* orch)
 
 size_t orch_create_framebuffer(orch_handler_t* orch)
 {
-    if (orch->framebuffer_size == HOST_FRAMEBUFFER_SIZE) exit(0);
+    if (orch->framebuffer_size == HOST_FRAMEBUFFER_SIZE) ERROR(-1, "Framebuffer size limit reached");
 
     orch_framebuffer_handler_t* framebuffer = &orch->framebuffers[orch->framebuffer_size];
     
@@ -497,13 +501,11 @@ size_t orch_create_framebuffer(orch_handler_t* orch)
     return  framebuffer_id;
 }
 
-size_t orch_create_image2d(orch_handler_t* orch, size_t width, size_t height, uint32_t mode)
+static size_t __orch_register_image2d(orch_handler_t* orch, size_t device_image_id, size_t width, size_t height, uint32_t mode)
 {
-    if (orch->rw_image2d_size == HOST_IMAGES_REF_SIZE) exit(0);
+    if (orch->rw_image2d_size == HOST_IMAGES_REF_SIZE) ERROR(-1, "Image2D size limit reached");
 
     orch_rw_image2d_handler_t* image = &orch->rw_image2ds[orch->rw_image2d_size];
-
-    size_t device_image_id = device_create_2d_texture(&orch->device, width, height, mode);
 
     *image = (orch_rw_image2d_handler_t) {
         .width = width,
@@ -520,12 +522,16 @@ size_t orch_create_image2d(orch_handler_t* orch, size_t width, size_t height, ui
 
 size_t orch_create_renderbuffer(orch_handler_t* orch, size_t width, size_t height, uint32_t mode)
 {
-    return orch_create_image2d(orch, width, height, mode);
+    size_t device_renderbuffer_id = device_create_renderbuffer(&orch->device, width, height, mode);
+
+    return __orch_register_image2d(orch, device_renderbuffer_id, width, height, mode);
 }
 
-size_t orch_create_2d_texture(orch_handler_t* orch, size_t width, size_t height, uint32_t mode)
+size_t orch_create_2d_texture(orch_handler_t* orch, size_t width, size_t height, size_t levels, uint32_t mode)
 {
-    return orch_create_image2d(orch, width, height, mode);
+    size_t device_2d_texture_id = device_create_2d_texture(&orch->device, width, height, levels, mode);
+
+    return __orch_register_image2d(orch, device_2d_texture_id, width, height, mode);
 }
 
 size_t orch_create_shader_from_binary(orch_handler_t* orch, size_t lenght, const void* binary)
@@ -661,6 +667,20 @@ void orch_write_2d_texture(
         image2d->mode,
         mode, 
         data
+    );
+}
+
+void orch_generate_mipmap(orch_handler_t* orch, size_t texture_id, size_t levels)
+{
+    orch_rw_image2d_handler_t* image2d = &orch->rw_image2ds[texture_id];
+
+    device_generate_2d_mipmap(
+        &orch->device,
+        image2d->image_id,
+        image2d->width,
+        image2d->height,
+        levels,
+        image2d->mode
     );
 }
 

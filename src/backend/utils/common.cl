@@ -102,7 +102,7 @@ static inline ulong cover8x8_lookup_mask(long yinit, uint yinc, uint flips, loca
     add_add_carry(&yfrac, yfrac, yinc, &shape, shape, shape);
     add_add_carry(&yfrac, yfrac, yinc, &shape, shape, shape);
     int oct = flips & ((1 << CR_FLIPBIT_FLIP_X) | (1 << CR_FLIPBIT_SWAP_XY));
-    ulong mask = *(local ulong*)((local uchar*)lut + oct + (shape << 5));
+    ulong mask = lut[(oct >> 3) + (shape << 2)];
 
     // Second half.
 
@@ -111,7 +111,7 @@ static inline ulong cover8x8_lookup_mask(long yinit, uint yinc, uint flips, loca
     add_add_carry(&yfrac, yfrac, yinc, &shape, shape, shape);
     add_add_carry(&yfrac, yfrac, yinc, &shape, shape, shape);
     add_add_carry(&yfrac, yfrac, yinc, &shape, shape, shape);
-    mask |= *(local ulong*)((local uchar*)lut + oct + (shape << 5) + (12 << 8));
+    mask |= lut[(oct >> 3) + (shape << 2) + (12 << 5)];
     return (flips >= (1 << CR_FLIPBIT_COMPL)) ? ~mask : mask;
 }
 

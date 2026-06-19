@@ -69,11 +69,11 @@ void orch_destroy(orch_handler_t* orch);
 
 size_t orch_create_framebuffer(orch_handler_t* orch);
 
-size_t orch_create_image2d(orch_handler_t* orch, size_t width, size_t height, uint32_t mode);
-
 size_t orch_create_renderbuffer(orch_handler_t* orch, size_t width, size_t height, uint32_t mode);
 
-size_t orch_create_2d_texture(orch_handler_t* orch, size_t width, size_t height, uint32_t mode);
+size_t orch_create_2d_texture(orch_handler_t* orch, size_t width, size_t height, size_t levels, uint32_t mode);
+
+void orch_generate_mipmap(orch_handler_t* orch, size_t texture_id, size_t levels);
 
 size_t orch_create_shader_from_binary(orch_handler_t* orch, size_t lenght, const void* binary);
 

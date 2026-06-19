@@ -34,7 +34,7 @@ static inline uint clear_color(
         ((get_enabled_red_data   (enabled_data) * 0xFFu) <<  0) |
         ((get_enabled_green_data (enabled_data) * 0xFFu) <<  8) |
         ((get_enabled_blue_data  (enabled_data) * 0xFFu) << 16) |
-        ((get_enabled_alpha_data (enabled_data) * 0xFFu) << 25) ;
+        ((get_enabled_alpha_data (enabled_data) * 0xFFu) << 24) ;
     
     return (color & ~clear_mask) | (clear_color & clear_mask);
 }

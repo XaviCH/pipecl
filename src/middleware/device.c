@@ -57,7 +57,7 @@ DEFINE_EXTERN_KERNEL(readnpixels);
 
 // methods
 
-static size_t __device_get_sizeof_image(cl_image_format* image_format, cl_image_desc* image_desc)
+static size_t __device_get_sizeof_texel(cl_image_format* image_format)
 {
     size_t size = 0;
     switch (image_format->image_channel_order) {
@@ -98,7 +98,14 @@ static size_t __device_get_sizeof_image(cl_image_format* image_format, cl_image_
             break; 
     }
 
-    return image_desc->image_width * image_desc->image_height * size; // Assuming no row pitch for simplicity
+    return size;
+}
+
+static size_t __device_get_sizeof_image(cl_image_format* image_format, cl_image_desc* image_desc)
+{
+    size_t texel_size = __device_get_sizeof_texel(image_format);
+
+    return image_desc->image_width * image_desc->image_height * texel_size;
 }
 
 static void __device_init_mem(
@@ -129,19 +136,56 @@ static void __device_init_2d_image(
     }
     #else
     {
-        size_t size = __device_get_sizeof_image(image_format, image_desc);
+        // TODO: maybe sizeof_image should compute mip mapping size also
+        size_t width  = image_desc->image_width;
+        size_t height = image_desc->image_height;
 
-        size_t last_level = size;
+        size_t size = width * height;
         for (cl_uint level = 1; level < image_desc->num_mip_levels; ++level)
         {
-            size += last_level / 4;
+            width  = width  > 1 ? width  / 2 : 1;
+            height = height > 1 ? height / 2 : 1;
+            size += width * height;
         }
-        
+        size *= __device_get_sizeof_texel(image_format);
+
         CL_ASSIGN_CHECK(mem->mem,   clCreateBuffer(device->context, flags, size, host_ptr, error));
     }
     #endif
 
     mem->write_event = NULL;
+}
+
+static void __device_init_2d_texture_buffer(
+    device_t* device,
+    __device_mem_t* buffer_mem,
+    cl_image_format* image_format,
+    cl_image_desc* image_desc
+) {
+    size_t size = __device_get_sizeof_image(image_format, image_desc);
+    CL_ASSIGN_CHECK(buffer_mem->queue, clCreateCommandQueue(device->context, device->device_id, 0, error));
+    CL_ASSIGN_CHECK(buffer_mem->mem,   clCreateBuffer(device->context, CL_MEM_READ_WRITE, size, NULL, error));
+    buffer_mem->write_event = NULL;
+}
+
+static void __device_init_2d_texture_storage(
+    device_t* device,
+    __device_texture_t* texture,
+    cl_image_format* image_format,
+    cl_image_desc* image_desc,
+    int with_sample_image
+) {
+    #if defined(DEVICE_IMAGE_ENABLED) && !defined(DEVICE_RW_IMAGE_ENABLED)
+        __device_init_2d_texture_buffer(device, &texture->mem, image_format, image_desc);
+        if (with_sample_image)
+        {
+            __device_init_2d_image(device, &texture->sample_image, CL_MEM_READ_ONLY, image_format, image_desc, NULL);
+        }
+    #else
+        // mem doubles as the sample source here, so with_sample_image is moot.
+        (void) with_sample_image;
+        __device_init_2d_image(device, &texture->mem, CL_MEM_READ_WRITE, image_format, image_desc, NULL);
+    #endif
 }
 
 static cl_mem __device_acquire_mem(
@@ -380,10 +424,24 @@ static cl_mem __device_get_texture_triangle_data(device_context_t* context)
 }
 
 static __device_bin_queue_t* __device_get_bin_queue(
-    device_t* device, 
+    device_t* device,
     size_t bin_queue_id
 ) {
     return &device->bin_queues[bin_queue_id];
+}
+
+static cl_mem __device_get_texture_rt_mem(device_t* device, size_t texture_id)
+{
+    return device->textures[texture_id].mem.mem;
+}
+
+static __device_mem_t* __device_get_texture_sample_obj(device_t* device, size_t texture_id)
+{
+    #if defined(DEVICE_IMAGE_ENABLED) && !defined(DEVICE_RW_IMAGE_ENABLED)
+        return &device->textures[texture_id].sample_image;
+    #else
+        return &device->textures[texture_id].mem;
+    #endif
 }
 
 
@@ -483,8 +541,54 @@ static const cl_uint  max_number_triangles = 1;// __device_get_max_number_triang
 static cl_int   ZERO = 0;
 
 // ---------------------------------------------------------------
+
+// Addressing/filter modes for device->samplers, indexed by the values returned
+// from __device_sampler_address_index / __device_sampler_filter_index.
+static const cl_addressing_mode __device_sampler_address_modes[3] = {
+    CL_ADDRESS_CLAMP_TO_EDGE,
+    CL_ADDRESS_REPEAT,
+    CL_ADDRESS_MIRRORED_REPEAT,
+};
+
+static const cl_filter_mode __device_sampler_filter_modes[2] = {
+    CL_FILTER_NEAREST,
+    CL_FILTER_LINEAR,
+};
+
+static cl_uint __device_sampler_address_index(texture_data_t texture_data)
+{
+    cl_uint wrap_s = get_texture_data_wrap_s(texture_data);
+    cl_uint wrap_t = get_texture_data_wrap_t(texture_data);
+
+    if (wrap_s == TEXTURE_WRAP_CLAMP_TO_EDGE && wrap_t == TEXTURE_WRAP_CLAMP_TO_EDGE)
+        return 0;
+
+    if (wrap_s == TEXTURE_WRAP_MIRRORED_REPEAT || wrap_t == TEXTURE_WRAP_MIRRORED_REPEAT)
+        return 2;
+
+    return 1;
+}
+
+static cl_uint __device_sampler_filter_index(texture_data_t texture_data)
+{
+    if (get_texture_data_require_software_support(texture_data))
+        return 0;
+
+    return is_texture_data_linear(texture_data) ? 1 : 0;
+}
+
+#ifdef DEVICE_IMAGE_ENABLED
+static cl_sampler __device_select_sampler(device_t* device, texture_data_t texture_data)
+{
+    return device->samplers
+        [__device_sampler_address_index(texture_data)]
+        [__device_sampler_filter_index(texture_data)];
+}
+#endif
+
+// ---------------------------------------------------------------
 // Device initializers
-void device_init(device_t* shared) 
+void device_init(device_t* shared)
 {
     // OpenCL setup
     const cl_uint num_platforms = DEVICE_PLATFORM_ID + 1; 
@@ -498,6 +602,19 @@ void device_init(device_t* shared)
     shared->device_id = devices[DEVICE_DEVICE_ID];
 
     CL_ASSIGN_CHECK(shared->context, clCreateContext(NULL, 1, &shared->device_id, NULL, NULL,  error));
+
+    #ifdef DEVICE_IMAGE_ENABLED
+    for (cl_uint address = 0; address < 3; ++address)
+    {
+        for (cl_uint filter = 0; filter < 2; ++filter)
+        {
+            CL_ASSIGN_CHECK(shared->samplers[address][filter],
+                clCreateSampler(shared->context, CL_TRUE,
+                    __device_sampler_address_modes[address],
+                    __device_sampler_filter_modes[filter], error));
+        }
+    }
+    #endif
 
     // Load programs
     size_t triangle_setup_size = triangle_setup_o_len;
@@ -553,7 +670,7 @@ void device_init(device_t* shared)
         .num_samples = 0,
         .buffer = NULL
     };
-    __device_init_2d_image(shared, &shared->textures[0], CL_MEM_READ_WRITE, &image_format, &image_desc, NULL);
+    __device_init_2d_texture_storage(shared, &shared->textures[0], &image_format, &image_desc, /*with_sample_image=*/1);
 
     __device_init_mem(shared, &shared->buffers[0], CL_MEM_READ_WRITE, sizeof(cl_uint), NULL);
 
@@ -596,7 +713,7 @@ void device_init_context(
             .image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER,
             .image_row_pitch = 0,
             .image_width = triangle_header_size / sizeof(cl_uint4),
-            .mem_object = context->g_tri_header, 
+            .buffer = context->g_tri_header, 
         };
         
         CL_ASSIGN_CHECK(context->t_tri_header, clCreateImage(device->context, CL_MEM_READ_ONLY, &image_format, &image_desc, NULL, error));
@@ -605,7 +722,7 @@ void device_init_context(
             .image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER,
             .image_width = triangle_data_size / sizeof(cl_uint4),
             .image_row_pitch = 0,
-            .mem_object = context->g_tri_data, 
+            .buffer = context->g_tri_data, 
         };
 
         CL_ASSIGN_CHECK(context->t_tri_data, clCreateImage(device->context, CL_MEM_READ_ONLY, &image_format, &image_desc, NULL, error));
@@ -618,7 +735,7 @@ void device_init_context(
             .image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER,
             .image_width = vertex_buffer_size / sizeof(cl_float4),
             .image_row_pitch = 0,
-            .mem_object = context->g_vertex_buffer,
+            .buffer = context->g_vertex_buffer,
         };
 
         CL_ASSIGN_CHECK(context->t_vertex_buffer, clCreateImage(device->context, CL_MEM_READ_WRITE, &image_format, &image_desc, NULL, error));
@@ -680,6 +797,9 @@ void device_init_context(
     for (size_t texture_unit = 0; texture_unit < DEVICE_TEXTURE_UNITS; ++texture_unit)
     {
         context->texture_units_ids[texture_unit] = 0;
+        #ifdef DEVICE_IMAGE_ENABLED
+        context->fragment_texture_samplers[texture_unit] = device->samplers[0][0];
+        #endif
     }
 
 }
@@ -879,19 +999,6 @@ static void __device_set_coarse_raster_kernel_args(
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_width_tiles),       &c_width_tiles));
 }
 
-// TODO:
-static void __device_set_fragment_shader_kernel_texture_unit_arg(
-
-)
-{
-    /*
-    __device_texture_t *texture = &context->device->textures[context->texture_units_ids[i]]; 
-    __device_mem_t *mem = &context->device->textures[context->texture_units_ids[i]];
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &texture->mem.mem));
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_sampler), &texture->mem.sampler));
-    */
-}
-
 static void __device_set_fragment_shader_kernel_args(
     cl_kernel kernel,
     device_context_t* context,
@@ -917,8 +1024,11 @@ static void __device_set_fragment_shader_kernel_args(
 
     for(int i=0; i<DEVICE_TEXTURE_UNITS; ++i)
     {
-        __device_mem_t *mem = &context->device->textures[context->texture_units_ids[i]];
+        __device_mem_t *mem = __device_get_texture_sample_obj(context->device, context->texture_units_ids[i]);
         CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &mem->mem));
+        #ifdef DEVICE_IMAGE_ENABLED
+        CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_sampler), &context->fragment_texture_samplers[i]));
+        #endif
     }
 
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &context->fragment_texture_datas_mem));
@@ -1158,6 +1268,7 @@ static cl_image_format __device_get_image_format_from_texture_mode(cl_uint textu
                 .image_channel_order = CL_A,
                 .image_channel_data_type = CL_UNORM_INT8,
             };
+            break;
         case TEX_RG8:
             image_format = (cl_image_format) {
                 .image_channel_order = CL_RG,
@@ -1191,9 +1302,10 @@ static cl_image_format __device_get_image_format_from_texture_mode(cl_uint textu
         case TEX_DEPTH_COMPONENT16:
             image_format = (cl_image_format) {
                 // TODO: this may be not supported for OpenCL 1.2 check cl_khr_depth_images extension
-                .image_channel_order = CL_DEPTH, 
+                .image_channel_order = CL_DEPTH,
                 .image_channel_data_type = CL_UNORM_INT16,
             };
+            break;
         default:
         case TEX_RGBA8:
             image_format = (cl_image_format) {
@@ -1244,9 +1356,21 @@ size_t device_create_ro_buffer(device_t* device, size_t size)
     return buffer_id;
 }
 
-size_t device_create_2d_texture(device_t* device, size_t width, size_t height, cl_uint texture_mode) 
+static size_t __device_create_2d_texture(device_t* device, size_t width, size_t height, size_t levels, cl_uint texture_mode, int with_sample_image)
 {
     size_t texture_id = device->textures_size;
+
+    if (texture_id >= HOST_TEXTURES_SIZE) {
+        fprintf(stderr, "Error: device texture storage exceeded HOST_TEXTURES_SIZE (%d); texture_id=%zu\n",
+                HOST_TEXTURES_SIZE, texture_id);
+        exit(1);
+    }
+
+    #ifdef DEVICE_IMAGE_ENABLED
+    size_t store_levels = 1;
+    #else
+    size_t store_levels = levels;
+    #endif
 
     cl_image_format image_format = __device_get_image_format_from_texture_mode(texture_mode);
     cl_image_desc image_desc = {
@@ -1257,16 +1381,76 @@ size_t device_create_2d_texture(device_t* device, size_t width, size_t height, c
         .image_array_size = 0,
         .image_row_pitch = 0,
         .image_slice_pitch = 0,
-        .num_mip_levels = 0,
+        .num_mip_levels = store_levels,
         .num_samples = 0,
         .buffer = NULL
     };
 
-    __device_init_2d_image(device, &device->textures[texture_id], CL_MEM_READ_WRITE, &image_format, &image_desc, NULL);
+    __device_init_2d_texture_storage(device, &device->textures[texture_id], &image_format, &image_desc, with_sample_image);
 
     device->textures_size += 1;
 
     return texture_id;
+}
+
+size_t device_create_2d_texture(device_t* device, size_t width, size_t height, size_t levels, cl_uint texture_mode)
+{
+    return __device_create_2d_texture(device, width, height, levels, texture_mode, /*with_sample_image=*/1);
+}
+
+size_t device_create_renderbuffer(device_t* device, size_t width, size_t height, cl_uint texture_mode)
+{
+    return __device_create_2d_texture(device, width, height, 1, texture_mode, /*with_sample_image=*/0);
+}
+
+void device_generate_2d_mipmap(device_t* device, size_t texture_id, size_t width, size_t height, size_t levels, cl_uint texture_mode)
+{
+    if (levels <= 1) return;
+
+    // It does generate mipmaps automatically when using images
+    #ifndef DEVICE_IMAGE_ENABLED
+
+    // TODO: implement mipmap generation using OpenCL kernels for devices that do not support images.
+    size_t bpp = __device_get_bytes_from_texture_mode(texture_mode);
+    int packed = (texture_mode == TEX_RGBA4 || texture_mode == TEX_RGB565 || texture_mode == TEX_RGB5_A1);
+
+    // Total packed size across the mip chain.
+    size_t total = 0, lw = width, lh = height;
+    for (size_t l = 0; l < levels; ++l) { total += lw * lh; lw = lw > 1 ? lw/2 : 1; lh = lh > 1 ? lh/2 : 1; }
+    total *= bpp;
+
+    unsigned char* buf = (unsigned char*) malloc(total);
+    __device_mem_t* mem = &device->textures[texture_id].mem;
+    CL_CHECK(clEnqueueReadBuffer(mem->queue, mem->mem, CL_TRUE, 0, width*height*bpp, buf, 0, NULL, NULL));
+
+    size_t src_off = 0, sw = width, sh = height;
+    for (size_t l = 1; l < levels; ++l)
+    {
+        size_t dw = sw > 1 ? sw/2 : 1;
+        size_t dh = sh > 1 ? sh/2 : 1;
+        size_t dst_off = src_off + sw*sh*bpp;
+        for (size_t y = 0; y < dh; ++y) for (size_t x = 0; x < dw; ++x)
+        {
+            unsigned char* dst = buf + (dst_off + (y*dw + x)*bpp);
+            size_t x0 = x*2, y0 = y*2;
+            size_t x1 = (x0+1 < sw) ? x0+1 : x0;
+            size_t y1 = (y0+1 < sh) ? y0+1 : y0;
+            const unsigned char* s00 = buf + (src_off + (y0*sw + x0)*bpp);
+            if (packed) { memcpy(dst, s00, bpp); continue; }
+            const unsigned char* s10 = buf + (src_off + (y0*sw + x1)*bpp);
+            const unsigned char* s01 = buf + (src_off + (y1*sw + x0)*bpp);
+            const unsigned char* s11 = buf + (src_off + (y1*sw + x1)*bpp);
+            for (size_t c = 0; c < bpp; ++c)
+                dst[c] = (unsigned char)(((unsigned)s00[c] + s10[c] + s01[c] + s11[c] + 2) / 4);
+        }
+        src_off = dst_off; sw = dw; sh = dh;
+    }
+
+    // Write back levels 1..N-1 (level 0 unchanged).
+    CL_CHECK(clEnqueueWriteBuffer(mem->queue, mem->mem, CL_TRUE,
+        width*height*bpp, total - width*height*bpp, buf + width*height*bpp, 0, NULL, NULL));
+    free(buf);
+    #endif // DEVICE_IMAGE_ENABLED
 }
 
 
@@ -1752,9 +1936,9 @@ void device_launch_fragment_shader(
     __device_set_fragment_shader_kernel_args(
         kernel,
         context,
-        context->device->textures[colorbuffer_id].mem,
-        context->device->textures[depthbuffer_id].mem,
-        context->device->textures[stencilbuffer_id].mem,
+        __device_get_texture_rt_mem(context->device, colorbuffer_id),
+        __device_get_texture_rt_mem(context->device, depthbuffer_id),
+        __device_get_texture_rt_mem(context->device, stencilbuffer_id),
         c_data,
         c_enabled,
         colorbuffer_mode,
@@ -1847,9 +2031,12 @@ void device_launch_clear_framebuffer(
 
     cl_uint count = 0;
 
-    CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &device->textures[colorbuffer_id].mem));
-    CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &device->textures[depthbuffer_id].mem));
-    CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &device->textures[stencilbuffer_id].mem));
+    cl_mem rt_color   = __device_get_texture_rt_mem(device, colorbuffer_id);
+    cl_mem rt_depth   = __device_get_texture_rt_mem(device, depthbuffer_id);
+    cl_mem rt_stencil = __device_get_texture_rt_mem(device, stencilbuffer_id);
+    CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &rt_color));
+    CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &rt_depth));
+    CL_CHECK(clSetKernelArg(kernel, count++, sizeof(cl_mem), &rt_stencil));
     #ifndef DEVICE_RW_IMAGE_ENABLED
     {
         CL_CHECK(clSetKernelArg(kernel, count++, sizeof(c_colorbuffer_mode), &c_colorbuffer_mode));
@@ -1879,7 +2066,7 @@ void device_launch_read_pixels(
 ) {
     cl_kernel kernel = device->read_pixels_kernel;
 
-    cl_mem colorbuffer = device->textures[colorbuffer_id].mem;
+    cl_mem colorbuffer = __device_get_texture_rt_mem(device, colorbuffer_id);
     
     size_t size = __device_get_bytes_from_texture_mode(ptr_mode) * (width - x) * (height - y);
 
@@ -2035,6 +2222,9 @@ void device_copy_context_last_state(device_context_t* dst, device_context_t* src
 {
     memcpy(dst->texture_units_ids, src->texture_units_ids, sizeof(src->texture_units_ids));
     memcpy(dst->vertex_attribute_pointers, src->vertex_attribute_pointers, sizeof(src->vertex_attribute_pointers));
+    #ifdef DEVICE_IMAGE_ENABLED
+    memcpy(dst->fragment_texture_samplers, src->fragment_texture_samplers, sizeof(src->fragment_texture_samplers));
+    #endif
 
     __device_write_mem(&dst->a_bin_counter,         CL_FALSE, 0, sizeof(ZERO), &ZERO);
     __device_write_mem(&dst->a_coarse_counter,      CL_FALSE, 0, sizeof(ZERO), &ZERO);
@@ -2166,12 +2356,20 @@ void device_write_fragment_texture_datas(
     size_t size = sizeof(texture_data_t[DEVICE_TEXTURE_UNITS]); 
 
     __device_write_mem(
-        &context->fragment_texture_datas_mem, 
-        CL_TRUE, 
-        0, 
+        &context->fragment_texture_datas_mem,
+        CL_TRUE,
+        0,
         size,
         texture_datas
     );
+
+    #ifdef DEVICE_IMAGE_ENABLED
+    for (size_t unit = 0; unit < DEVICE_TEXTURE_UNITS; ++unit)
+    {
+        context->fragment_texture_samplers[unit] =
+            __device_select_sampler(context->device, texture_datas[unit]);
+    }
+    #endif
 }
 
 void device_write_fragment_uniform(
@@ -2203,12 +2401,12 @@ void device_write_2d_texture(
     const void* data
 ) 
 {
-    __device_mem_t* texture_mem = &device->textures[texture_id];
+    __device_mem_t* texture_mem = __device_get_texture_sample_obj(device, texture_id);
 
     size_t origin[3] = {x, y, 0};
     size_t region[3] = {width, height, 1};
 
-    __device_write_2d_texture(&device->textures[texture_id], CL_TRUE, origin, region, 0, 0, data);
+    __device_write_2d_texture(texture_mem, CL_TRUE, origin, region, 0, 0, data);
 }
 
 void device_write_buffer(device_t* device, size_t buffer_id, size_t offset, size_t size, const void* data) 

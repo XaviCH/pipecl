@@ -2,11 +2,7 @@
 
 #define VARYING_VEC3 out_color
 
-#ifdef __COMPILER_RELATIVE_PATH__
-    #include <backend/shaders/wrapper.cl>
-#else
-    #include "glsc2/src/backend/shaders/wrapper.cl"
-#endif
+#include <backend/shaders/wrapper.cl>
 
 VS_MAIN({
     gl_Position = (vec4)(position, 1);

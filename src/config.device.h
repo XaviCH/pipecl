@@ -30,11 +30,13 @@
 
 #define DEVICE_MAX_WORK_GROUP_SIZE 1024
 
-#define DEVICE_SUB_GROUP_THREADS_LOG2 6
+#define DEVICE_SUB_GROUP_THREADS_LOG2 5
 
-#define DEVICE_IMAGE_SUPPORT 0
+#define DEVICE_IMAGE_SUPPORT 0 // if supported device can run built-in image functions
 
-#define DEVICE_RW_IMAGE_SUPPORT 0
+#define DEVICE_RW_IMAGE_SUPPORT 0 // if supported device can use read-write images
+
+#define DEVICE_POINTER_REINTERPRET_SUPPORT 0 // if supported a buffer pointer can be reinterpreted to another element type; disable for logical-SPIR-V drivers (e.g. clspv) that forbid pointer recasting
 
 #define DEVICE_BARRIER_SYNC_LOCAL_ATOMIC_SUPPORT 1
 
@@ -46,7 +48,7 @@
 #define DEVICE_SUB_GROUP_LOCKSTEP_RAW_SUPPORT 0
 
 // if enabled the device supports sub group intra-register operations as ballot, all, any, scan or reduce. 
-#define DEVICE_SUB_GROUP_INTRINSICTS_SUPPORT 0
+#define DEVICE_SUB_GROUP_INTRINSICTS_SUPPORT 1
 
 // ------
 // render configuration
@@ -60,6 +62,8 @@
 
 #define DEVICE_VERTEX_ATTRIBUTE_SIZE 16
 #define DEVICE_UNIFORM_CAPACITY (2*1024) // 2 KB for uniforms
+
+#define DEVICE_UNIFORM_CONSTANT_MEM_SUPPORT 0
 
 #define DEVICE_VERTEX_TEXTURE_UNITS 0 // max number of vertex texture units
 #define DEVICE_TEXTURE_UNITS 8 // max number of active texture units
@@ -91,7 +95,8 @@
 // coarse raster configuration
 #define DEVICE_COARSE_THREADS (32 * 16)
 
-// fine raster Configuration
+// fine raster configuration
+// only for devices with sub group intrinsics support
 #define DEVICE_MAX_FINE_SUB_GROUPS 20
 
 // ------
@@ -134,7 +139,7 @@
 
 #define HOST_RENDERBUFFERS_SIZE 8
 
-#define HOST_TEXTURES_SIZE 8
+#define HOST_TEXTURES_SIZE 16
 
 // -----
 // software configuration
@@ -142,7 +147,7 @@
 
 #define DEVICE_MAX_TEXTURE_SIZE_LOG2 11 // (2048 x 2048) max size  
 
-#define DEVICE_MIPMAP_LEVELS
+#define DEVICE_MIPMAP_LEVELS 15
 
 // ------
 // extensions configuration

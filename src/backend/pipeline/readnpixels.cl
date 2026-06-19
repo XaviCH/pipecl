@@ -2,7 +2,7 @@
 
 kernel void readnpixels(
   colorbuffer_t colorbuffer,
-  global void* out,
+  rw_buffer_t out,
   const uint colorbuffer_mode,
   const uint out_mode,
   const uchar swap_rb_channels,

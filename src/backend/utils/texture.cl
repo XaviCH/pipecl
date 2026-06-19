@@ -54,7 +54,7 @@ static inline float2 get_wrapped_ncoord(float2 coord, const texture_data_t textu
  * @param lod will access
  */
 static inline float4 read_2d_bufferf(
-    global const void* buffer, 
+    ro_buffer_t buffer,
     const texture_data_t texture_data,
     float2 coord,
     float lod
@@ -64,7 +64,7 @@ static inline float4 read_2d_bufferf(
  * @param coord
  */
 static inline uint4 read_2d_bufferui(
-    global const void* buffer,
+    ro_buffer_t buffer,
     const texture_data_t texture_data,
     int2 coord
 );
@@ -167,7 +167,7 @@ static inline float2 get_wrapped_ncoord(float2 coord, const texture_data_t textu
 // ------------------------------------------------------------------------------
 
 static inline float4 read_2d_bufferf(
-    global const void* buffer, 
+    ro_buffer_t buffer,
     const texture_data_t texture_data,
     float2 coord,
     float lod
@@ -185,13 +185,15 @@ static inline float4 read_2d_bufferf(
     // generate mipmapping objects
     uint                lod_offset  = get_lod_offset(size, lod) * csize;
     texture_size_t      lod_size    = get_lod_size(size, lod);
-    global const void*  lod_buffer  = (global const void*) ((global const uchar*) buffer + lod_offset);
+    ro_buffer_t         lod_buffer  = buffer_offset_u8(buffer, lod_offset);
     float2              lod_ucoord  = get_lod_ucoordf(ncoord, size, lod);
-    
+
+    texture_data_t lod_texture_data = texture_data;
+    set_texture_data_size(&lod_texture_data, lod_size);
 
     // generate image coordanates
     int2 floor_coord = convert_int2_rtz(lod_ucoord);
-    int2 ceil_coord  = min(convert_int2_rtp(lod_ucoord), convert_int2(size) - 1);
+    int2 ceil_coord  = min(convert_int2_rtp(lod_ucoord), convert_int2(lod_size) - 1);
 
     float2 frac_coord   = lod_ucoord - floor(lod_ucoord);
 
@@ -205,7 +207,7 @@ static inline float4 read_2d_bufferf(
             y ? ceil_coord.y : floor_coord.y
         };
 
-        uint4 colorui = read_2d_bufferui(lod_buffer, texture_data, icoord);
+        uint4 colorui = read_2d_bufferui(lod_buffer, lod_texture_data, icoord);
         
         if (! linear) return uint4_to_float4_color(colorui, mode);
 
@@ -221,7 +223,7 @@ static inline float4 read_2d_bufferf(
 }
 
 static inline uint4 read_2d_bufferui(
-    global const void* buffer,
+    ro_buffer_t buffer,
     const texture_data_t texture_data,
     int2 coord
 ) {
@@ -237,37 +239,33 @@ static inline uint4 read_2d_bufferui(
         default:
         case TEX_R8:
         {
-            global const uchar* ptr = (global const uchar*) buffer + offset;
-            color.x = ptr[0];
+            color.x = buffer_load_u8(buffer, offset);
             break;
         }
         case TEX_RG8:
         {
-            global const uchar* ptr = (global const uchar*) buffer + offset*2;
-            color.x = ptr[0]; 
-            color.y = ptr[1];
+            color.x = buffer_load_u8(buffer, offset*2 + 0);
+            color.y = buffer_load_u8(buffer, offset*2 + 1);
             break;
         }
         case TEX_RGB8:
         {
-            global const uchar* ptr = (global const uchar*) buffer + offset*3;
-            color.x = ptr[0];
-            color.y = ptr[1];
-            color.z = ptr[2];
+            color.x = buffer_load_u8(buffer, offset*3 + 0);
+            color.y = buffer_load_u8(buffer, offset*3 + 1);
+            color.z = buffer_load_u8(buffer, offset*3 + 2);
             break;
         }
         case TEX_RGBA8:
         {
-            global const uchar* ptr = (global const uchar*) buffer + offset*4;
-            color.x = ptr[0];
-            color.y = ptr[1];
-            color.z = ptr[2];
-            color.w = ptr[3];
+            color.x = buffer_load_u8(buffer, offset*4 + 0);
+            color.y = buffer_load_u8(buffer, offset*4 + 1);
+            color.z = buffer_load_u8(buffer, offset*4 + 2);
+            color.w = buffer_load_u8(buffer, offset*4 + 3);
             break;
         }
         case TEX_RGBA4:
         {
-            ushort tex = ((global const ushort*) buffer)[offset];
+            ushort tex = buffer_load_u16(buffer, offset);
             color.x = (tex >>  0) & 0xFu;
             color.y = (tex >>  4) & 0xFu;
             color.z = (tex >>  8) & 0xFu;
@@ -276,7 +274,7 @@ static inline uint4 read_2d_bufferui(
         }
         case TEX_RGB5_A1:
         {
-            ushort tex = ((global const ushort*) buffer)[offset];
+            ushort tex = buffer_load_u16(buffer, offset);
             color.x = (tex >>  0) & 0x1Fu;
             color.y = (tex >>  5) & 0x1Fu;
             color.z = (tex >> 10) & 0x1Fu;
@@ -285,7 +283,7 @@ static inline uint4 read_2d_bufferui(
         }
         case TEX_RGB565:
         {
-            ushort tex = ((global const ushort*) buffer)[offset];
+            ushort tex = buffer_load_u16(buffer, offset);
             color.x = (tex >>  0) & 0x1Fu;
             color.y = (tex >>  5) & 0x3Fu;
             color.z = (tex >> 11) & 0x1Fu;
@@ -302,11 +300,7 @@ static inline float4 read_2d_texturef(
     float2 coord,
     float lod
 ) {
-    float4 color;
-
-    int max_level = get_texture_data_max_level(texture_data);
     bool mipmapping = is_texture_data_mipmapping(texture_data);
-    bool mipmapping_linear = is_texture_data_mipmapping_linear(texture_data);
 
     if (! mipmapping) 
     {
@@ -318,6 +312,8 @@ static inline float4 read_2d_texturef(
             return read_2d_bufferf(TEXTURE_UNIT_ARG(texture), texture_data, coord, 0.f);
         #endif
     }
+
+    bool mipmapping_linear = is_texture_data_mipmapping_linear(texture_data);
 
     if (! mipmapping_linear)
     {

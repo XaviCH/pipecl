@@ -1,27 +1,13 @@
-#ifdef __COMPILER_RELATIVE_PATH__
-    #include <backend/types.cl>
-    #include <backend/utils/sub_group_mask.cl>
-    #include <backend/utils/sync.cl>
-    #include <backend/pipeline/gl/blending.cl>
-    #include <backend/pipeline/gl/depth.cl>
-    #include <backend/pipeline/gl/stencil.cl>
-    #include <backend/pipeline/gl/clear.cl>
-#else
-    #include "glsc2/src/backend/types.cl"
-    #include "glsc2/src/backend/utils/sub_group_mask.cl"
-    #include "glsc2/src/backend/utils/sync.cl"
-    #include "glsc2/src/backend/pipeline/gl/blending.cl"
-    #include "glsc2/src/backend/pipeline/gl/depth.cl"
-    #include "glsc2/src/backend/pipeline/gl/stencil.cl"
-    #include "glsc2/src/backend/pipeline/gl/clear.cl"
-#endif
+#include <backend/types.cl>
+#include <backend/utils/sub_group_mask.cl>
+#include <backend/utils/sync.cl>
+#include <backend/pipeline/gl/blending.cl>
+#include <backend/pipeline/gl/depth.cl>
+#include <backend/pipeline/gl/stencil.cl>
+#include <backend/pipeline/gl/clear.cl>
 
 #ifndef SHADER
-    #ifdef __COMPILER_RELATIVE_PATH__
-        #include <backend/pipeline/gl/base.cl>
-    #else
-        #include "glsc2/src/backend/pipeline/gl/base.cl"
-    #endif
+    #include <backend/pipeline/gl/base.cl>
 #endif
 
 
@@ -39,12 +25,28 @@ static inline float3 compute_barys(
     return (float3){1.0f - u - v, u, v};
 }
 
+static inline float3 compute_barys_grad(
+    const int3* wpleq, const int3* upleq, const int3* vpleq,
+    int sample_x, int sample_y, float4* dbary)
+{
+    float w = 1.0f / (float)(wpleq->x * sample_x + wpleq->y * sample_y + wpleq->z);
+    float u = w * (float)(upleq->x * sample_x + upleq->y * sample_y + upleq->z);
+    float v = w * (float)(vpleq->x * sample_x + vpleq->y * sample_y + vpleq->z);
+
+    float du_dx = 2.0f * w * ((float)upleq->x - u * (float)wpleq->x);
+    float du_dy = 2.0f * w * ((float)upleq->y - u * (float)wpleq->y);
+    float dv_dx = 2.0f * w * ((float)vpleq->x - v * (float)wpleq->x);
+    float dv_dy = 2.0f * w * ((float)vpleq->y - v * (float)wpleq->y);
+    *dbary = (float4){du_dx, du_dy, dv_dx, dv_dy};
+
+    return (float3){1.0f - u - v, u, v};
+}
+
 //------------------------------------------------------------------------
 
 inline bool run_fragment_shader(
-    global void* gl_uniforms,
-    FS_KERNEL_PARAMS
-
+    uniform_addr_space uniform_buffer_t* restrict uniform_buffer,
+    fragment_shader_kernel_params,
     fragment_shader_output_t* output,
     int data_idx, int pixel_x, int pixel_y,
     #ifdef DEVICE_IMAGE_ENABLED
@@ -79,12 +81,13 @@ inline bool run_fragment_shader(
     int3 upleq = (int3){t1.w, t2.x, t2.y};
     int3 vpleq = (int3){t2.z, t2.w, t3.x};
     uint3 vert_idx = (uint3){t3.y, t3.z, t3.w};
-    float3 bary = compute_barys(&wpleq, &upleq, &vpleq, (pixel_x * 2 + 1), (pixel_y * 2 + 1));
+    float4 dbary;
+    float3 bary = compute_barys_grad(&wpleq, &upleq, &vpleq, (pixel_x * 2 + 1), (pixel_y * 2 + 1), &dbary);
 
     return gl_fragment_shader(
-        gl_uniforms,
-        FS_KERNEL_ARGS
-        output, vertex_buffer, vert_idx, bary 
+        uniform_buffer,
+        fragment_shader_kernel_args,
+        output, vertex_buffer, vert_idx, bary, dbary
         );
 }
 
@@ -355,14 +358,6 @@ inline void execute_ROP_single_sample(
 
 //------------------------------------------------------------------------
 
-#ifndef FS_KERNEL_ARGS
-#define FS_KERNEL_ARGS
-#endif // FS_KERNEL_ARGS
-
-#ifndef FS_KERNEL_PARAMS
-#define FS_KERNEL_PARAMS
-#endif // FS_KERNEL_PARAMS
-
 static inline bool is_surface_out_viewport(int2 surf, uint2 viewport) 
 {
     return surf.x >= viewport.x || surf.y >= viewport.y;
@@ -614,8 +609,8 @@ kernel
     #error This kernel requires DEVICE_SUB_GROUP_ENABLED
 #endif
 void fine_raster_single_sample(
-    global const void* gl_uniforms,
-    FS_KERNEL_PARAMS
+    uniform_addr_space uniform_buffer_t* restrict uniform_buffer_array,
+    fragment_shader_kernel_params,
 
     global int* restrict a_fine_counter,
     global const int* restrict a_num_active_tiles,
@@ -656,19 +651,28 @@ void fine_raster_single_sample(
 {
                                                                             // for 20 warps:
     local volatile ulong    s_cover8x8_lut      [CR_COVER8X8_LUT_SIZE];           // 6KB
+    // local framebuffer 446B
     local volatile uint     s_tile_color        [DEVICE_FINE_SUB_GROUPS][CR_TILE_SQR]; // 5KB
     local volatile ushort   s_tile_depth        [DEVICE_FINE_SUB_GROUPS][CR_TILE_SQR]; // 2.5KB
     local volatile uchar    s_tile_stencil      [DEVICE_FINE_SUB_GROUPS][CR_TILE_SQR]; // 1.25KB
+    // local triangle data 21B * TBE = 1344B --> 15B * TBE 960B
+    // t_idx could be stored in ushort
     local volatile uint     s_triangle_idx      [DEVICE_FINE_SUB_GROUPS][TRIANGLE_BUFFER_ELEMS];          // 5KB  original triangle index
+    // t_data could be stored in ushort or 0 if stored unprocessed inside triangle idx
     local volatile uint     s_tri_data_idx      [DEVICE_FINE_SUB_GROUPS][TRIANGLE_BUFFER_ELEMS];          // 5KB  CRTriangleData index
+    // high dependecy on tile size
     local volatile ulong    s_triangle_cov      [DEVICE_FINE_SUB_GROUPS][TRIANGLE_BUFFER_ELEMS];          // 10KB coverage mask
+    // may could fit in ushort
     local volatile uint     s_triangle_frag     [DEVICE_FINE_SUB_GROUPS][TRIANGLE_BUFFER_ELEMS];          // 5KB  fragment index
+    // high dependency on triangle primitive conf
     local volatile uchar    l_triangle_conf    [DEVICE_FINE_SUB_GROUPS][TRIANGLE_BUFFER_ELEMS];          // 0.25KB  per-triangle configuration
 
-    // The required local mem for specific sub-group communications.
+    // local tmp required for sync 256B
+    local volatile sg_tmp_mem_t     l_temp              [DEVICE_FINE_SUB_GROUPS];                   // tmp memory
+                                                                                                    // = 47.25KB total
+    // if rm unnecessary local memory warp instances could go up to 30 -> to get up to 32 subgroups TBE <= 57, may be posible
+    // max though put could increase 60%
 
-    local volatile sg_tmp_mem_t     l_temp              [DEVICE_FINE_SUB_GROUPS]; // tmp memory
-                                                                            // = 47.25KB total
     // Warp Space
     local volatile uint*    w_tile_color        = (local volatile uint*)    &s_tile_color[get_local_id(1)];
     local volatile ushort*  w_tile_depth        = (local volatile ushort*)  &s_tile_depth[get_local_id(1)];
@@ -918,9 +922,8 @@ void fine_raster_single_sample(
                     // run fragment shader
                     
                     active_rop_lane = run_fragment_shader(
-                        (global void*)((global uchar*)gl_uniforms + DEVICE_UNIFORM_CAPACITY*conf_idx),
-                        FS_KERNEL_ARGS
-
+                        &uniform_buffer_array[conf_idx],
+                        fragment_shader_kernel_args,
                         &fragment_shader_output,
                         data_idx, pixel_x, pixel_y,
                         #ifdef DEVICE_IMAGE_ENABLED

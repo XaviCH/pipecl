@@ -749,6 +749,11 @@ static void write_gl_state_to_orch(GLenum draw_mode)
                 texture_data,
                 (texture_size_t){texture->width, texture->height}
             );
+
+            set_texture_data_max_level(
+                texture_data,
+                texture->levels > 0 ? texture->levels - 1 : 0
+            );
         }
 
         orch_write_fragment_texture_data(orch, framebuffer->id, texture_datas);
@@ -1006,7 +1011,20 @@ GL_APICALL void GL_APIENTRY glGenBuffers (GLsizei n, GLuint *buffers)
     }
 }
 
-GL_APICALL void GL_APIENTRY glGenerateMipmap (GLenum target) NOT_IMPLEMENTED;
+GL_APICALL void GL_APIENTRY glGenerateMipmap (GLenum target)
+{
+    if (target != GL_TEXTURE_2D) SET_ERROR_AND_RETURN(GL_INVALID_ENUM);
+
+    if (!_texture_binding) SET_ERROR_AND_RETURN(GL_INVALID_OPERATION);
+
+    gl_texture_t* texture = &_textures[_texture_binding-1];
+
+    if (texture->width == 0 || texture->height == 0) SET_ERROR_AND_RETURN(GL_INVALID_OPERATION);
+    
+    if (texture->levels <= 1) return; // nothing to generate
+
+    orch_generate_mipmap(orch, texture->id, texture->levels);
+}
 
 GL_APICALL void GL_APIENTRY glGenFramebuffers (GLsizei n, GLuint *framebuffers) 
 {
@@ -1067,9 +1085,9 @@ GL_APICALL void GL_APIENTRY glGenTextures (GLsizei n, GLuint *textures)
     }
 }
 
-GL_APICALL GLint GL_APIENTRY glGetAttribLocation (GLuint program, const GLchar *name) 
+GL_APICALL GLint GL_APIENTRY glGetAttribLocation (GLuint program, const GLchar *name)
 {
-    if (program == 0) SET_ERROR_AND_RETURN_VALUE(GL_INVALID_OPERATION, -1);
+    if (is_valid_program(program) == GL_FALSE) SET_ERROR_AND_RETURN_VALUE(GL_INVALID_OPERATION, -1);
 
     gl_program_t* program_ptr = &_programs[program-1];
 
@@ -1541,17 +1559,15 @@ GL_APICALL void GL_APIENTRY glTexStorage2D (GLenum target, GLsizei levels, GLenu
     if (width < 1 || height < 1 || levels < 1) SET_ERROR_AND_RETURN(GL_INVALID_VALUE);
     
     if (levels > (int) log2f(MAX(width,height)) + 1) SET_ERROR_AND_RETURN(GL_INVALID_OPERATION);
-    
-    if (levels != 1 && (IS_POWER_OF_2(width) || IS_POWER_OF_2(height))) SET_ERROR_AND_RETURN(GL_INVALID_OPERATION);
-    
+
+    if (levels != 1 && !(IS_POWER_OF_2(width) && IS_POWER_OF_2(height))) SET_ERROR_AND_RETURN(GL_INVALID_OPERATION);
+
     gl_texture_t* texture = &_textures[_texture_binding-1];
 
-    if (texture->width || texture->height) SET_ERROR_AND_RETURN(GL_INVALID_OPERATION); 
-    
-    if (levels != 1) NOT_IMPLEMENTED; // Mipmaps not supported yet
+    if (texture->width || texture->height) SET_ERROR_AND_RETURN(GL_INVALID_OPERATION);
 
     uint32_t texture_mode = get_texture_mode_from_internalformat(internalformat);
-    texture->id = orch_create_2d_texture(orch, width, height, texture_mode);
+    texture->id = orch_create_2d_texture(orch, width, height, levels, texture_mode);
     texture->width = width;
     texture->height = height;
     texture->internalformat = internalformat;

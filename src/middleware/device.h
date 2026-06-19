@@ -40,14 +40,10 @@ typedef struct {
 } __device_mem_t;
 
 
-// TODO: device textures is hw dependant
 typedef struct {
     __device_mem_t mem;
-    #ifdef DEVICE_IMAGE_ENABLED
-        cl_sampler sampler;
-        #ifndef DEVICE_RW_IMAGE_ENABLED
-            cl_mem buffer_mem;
-        #endif
+    #if defined(DEVICE_IMAGE_ENABLED) && !defined(DEVICE_RW_IMAGE_ENABLED)
+    __device_mem_t sample_image;
     #endif
 } __device_texture_t;
 
@@ -86,7 +82,14 @@ typedef struct {
     __device_mem_t              buffers             [HOST_BUFFERS_SIZE];
 
     size_t                      textures_size;
-    __device_mem_t              textures            [HOST_TEXTURES_SIZE];
+    __device_texture_t          textures            [HOST_TEXTURES_SIZE];
+
+    #ifdef DEVICE_IMAGE_ENABLED
+    // Pre-computed samplers pairs [address][filter]
+    // - address: 0=CLAMP_TO_EDGE, 1=REPEAT, 2=MIRRORED_REPEAT
+    // - filter:  0=NEAREST, 1=LINEAR
+    cl_sampler                  samplers            [3][2];
+    #endif
 } device_t;
 
 typedef struct {
@@ -152,6 +155,9 @@ typedef struct {
     cl_command_queue        raster_command_queue;
     cl_event                bin_wait_event                  [DEVICE_BIN_QUEUE_SIZE][DEVICE_BIN_QUEUE_SIZE];
     __device_mem_t          fragment_texture_datas_mem;                                          // sizeof(texture_data_t[DEVICE_TEXTURE_UNITS])
+    #ifdef DEVICE_IMAGE_ENABLED
+    cl_sampler              fragment_texture_samplers       [DEVICE_TEXTURE_UNITS];
+    #endif
     __device_mem_t          fragment_uniform_mem;                                           // sizeof(cl_uchar[TRIANGLE_PRIMITIVE_CONFIGS][DEVICE_UNIFORM_CAPACITY])
     // cl_mem                  fragment_uniform_subbuffer_mems [TRIANGLE_PRIMITIVE_CONFIGS];    // subbuffers for vertex shader, TODO: do not use sub-buffers in OpenCL
     __device_mem_t          rop_configs_mem;                                                // sizeof(rop_config_t[TRIANGLE_PRIMITIVE_CONFIGS])
@@ -172,7 +178,11 @@ size_t device_create_program_from_binary(device_t* device, size_t size, const un
 
 size_t device_create_ro_buffer(device_t* device, size_t size); 
 
-size_t device_create_2d_texture(device_t* device, size_t width, size_t height, cl_uint texture_mode);
+size_t device_create_2d_texture(device_t* device, size_t width, size_t height, size_t levels, cl_uint texture_mode);
+
+size_t device_create_renderbuffer(device_t* device, size_t width, size_t height, cl_uint texture_mode);
+
+void device_generate_2d_mipmap(device_t* device, size_t texture_id, size_t width, size_t height, size_t levels, cl_uint texture_mode);
 
 // device getters
 

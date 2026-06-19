@@ -3,13 +3,9 @@
 
 #define CL_TARGET_OPENCL_VERSION 120
 
-#ifdef __COMPILER_RELATIVE_PATH__
 #include <constants.device.h>
-#else
-#include "constants.device.h"
-#endif
 
-// defining primitives for c and cl context
+// defining primitives for C and OpenCL
 #ifdef __OPENCL_VERSION__
 typedef bool    cl_bool;
 typedef uchar   cl_uchar;
@@ -614,7 +610,10 @@ static cl_uint get_texture_data_wrap_s(texture_data_t texture_data)            {
 static cl_uint get_texture_data_wrap_t(texture_data_t texture_data)            { return (texture_data.misc >> 6) & 0x3u; }
 static cl_uint get_texture_data_min_filter(texture_data_t texture_data)        { return (texture_data.misc >> 8) & 0x7u; }
 static cl_uint get_texture_data_mag_filter(texture_data_t texture_data)        { return (texture_data.misc >> 11) & 0x1u; }
-static cl_int  get_texture_data_max_level(texture_data_t texture_data)         { return 0; } // NOT IMPLEMENTED
+#if DEVICE_MIPMAP_LEVELS > 15
+    #error DEVICE_MIPMAP_LEVELS > 15 requires a wider texture max_level field (misc bits 12..15)
+#endif
+static cl_int  get_texture_data_max_level(texture_data_t texture_data)         { return (texture_data.misc >> 12) & 0xFu; }
 
 // texture data setters
 
@@ -645,6 +644,12 @@ static void set_texture_data_mag_filter(texture_data_t *texture_data, cl_ushort 
 {
     texture_data->misc &= ~(0x1u << 11);
     texture_data->misc |= (mag_filter & 0x1u) << 11;
+}
+
+static void set_texture_data_max_level(texture_data_t *texture_data, cl_ushort max_level)
+{
+    texture_data->misc &= ~(0xFu << 12);
+    texture_data->misc |= (max_level & 0xFu) << 12;
 }
 
 // texture data utils
@@ -773,7 +778,7 @@ static cl_bool get_texture_data_require_negate_x(texture_data_t texture_data, fl
     {
         cl_uint wrap_t = get_texture_data_wrap_t(texture_data);
 
-        return wrap_t == TEXTURE_WRAP_MIRRORED_REPEAT && wrap_s == TEXTURE_WRAP_REPEAT && fmod(x,2.f) == 1; 
+        return wrap_t == TEXTURE_WRAP_MIRRORED_REPEAT && wrap_s == TEXTURE_WRAP_REPEAT && ((cl_int) floor(x) & 1); 
     }
     #else
     {
@@ -790,7 +795,7 @@ static cl_bool get_texture_data_require_negate_y(texture_data_t texture_data, fl
     {
         cl_uint wrap_s = get_texture_data_wrap_s(texture_data);
 
-        return wrap_s == TEXTURE_WRAP_MIRRORED_REPEAT && wrap_t == TEXTURE_WRAP_REPEAT && fmod(y,2.f) == 1; 
+        return wrap_s == TEXTURE_WRAP_MIRRORED_REPEAT && wrap_t == TEXTURE_WRAP_REPEAT && ((cl_int) floor(y) & 1); 
     }
     #else
     {
@@ -809,7 +814,7 @@ static cl_bool get_texture_data_require_diff_x(texture_data_t texture_data, floa
     {
         cl_uint wrap_s = get_texture_data_wrap_s(texture_data);
         
-        return wrap_s == TEXTURE_WRAP_MIRRORED_REPEAT && fmod(x,2.f) == 1;
+        return wrap_s == TEXTURE_WRAP_MIRRORED_REPEAT && ((cl_int) floor(x) & 1);
     }
     #endif 
 }
@@ -824,7 +829,7 @@ static cl_bool get_texture_data_require_diff_y(texture_data_t texture_data, floa
     {
         cl_uint wrap_t = get_texture_data_wrap_t(texture_data);
         
-        return wrap_t == TEXTURE_WRAP_MIRRORED_REPEAT && fmod(y,2.f) == 1;
+        return wrap_t == TEXTURE_WRAP_MIRRORED_REPEAT && ((cl_int) floor(y) & 1);
     }
     #endif
 }
@@ -898,11 +903,15 @@ static cl_uchar is_framebuffer_data_stencilbuffer_enabled(gl_framebuffer_data_t 
     return framebuffer_data.misc & (0x1u << 2);
 }
 
-// uniform type
-
-typedef struct {
+typedef union {
+    #if defined(__OPENCL_VERSION__) && defined(DEFINE_UNIFORMS)
+    struct { DEFINE_UNIFORMS };
+    #endif
     cl_uchar __attribute__((aligned(DEVICE_MEM_BASE_ADDR_ALIGN))) data[DEVICE_UNIFORM_CAPACITY];
 } uniform_buffer_t;
+
+// TODO: do this static assert in a way that works for both C and OpenCL
+// _Static_assert(sizeof(uniform_buffer_t) == DEVICE_UNIFORM_CAPACITY);
 
 typedef uniform_buffer_t uniform_buffer_array_t[TRIANGLE_PRIMITIVE_CONFIGS] __attribute__((aligned(DEVICE_MEM_BASE_ADDR_ALIGN)));
 
