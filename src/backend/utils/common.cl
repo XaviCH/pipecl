@@ -289,30 +289,30 @@ static inline int clipPolygonWithPlane(float* baryOut, const float* baryIn, int 
 // d1 = &Vec4f(clipPos1 - clipPos0)
 // d2 = &Vec4f(clipPos2 - clipPos0)
 
-static inline int clipTriangleWithFrustum(float* bary, const float* v0, const float* v1, const float* v2, const float* d1, const float* d2)
+static inline int clipTriangleWithFrustum(float* bary, const float4 v0, const float4 v1, const float4 v2, const float4 d1, const float4 d2)
 {
     int num = 3;
     bary[0] = 0.0f, bary[1] = 0.0f;
     bary[2] = 1.0f, bary[3] = 0.0f;
     bary[4] = 0.0f, bary[5] = 1.0f;
 
-    if ((v0[3] < fabs(v0[0])) | (v1[3] < fabs(v1[0])) | (v2[3] < fabs(v2[0])))
+    if ((v0.w < fabs(v0.x)) | (v1.w < fabs(v1.x)) | (v2.w < fabs(v2.x)))
     {
         float temp[18];
-        num = clipPolygonWithPlane(temp, bary, num, v0[3] + v0[0], d1[3] + d1[0], d2[3] + d2[0]);
-        num = clipPolygonWithPlane(bary, temp, num, v0[3] - v0[0], d1[3] - d1[0], d2[3] - d2[0]);
+        num = clipPolygonWithPlane(temp, bary, num, v0.w + v0.x, d1.w + d1.x, d2.w + d2.x);
+        num = clipPolygonWithPlane(bary, temp, num, v0.w - v0.x, d1.w - d1.x, d2.w - d2.x);
     }
-    if ((v0[3] < fabs(v0[1])) | (v1[3] < fabs(v1[1])) | (v2[3] < fabs(v2[1])))
+    if ((v0.w < fabs(v0.y)) | (v1.w < fabs(v1.y)) | (v2.w < fabs(v2.y)))
     {
         float temp[18];
-        num = clipPolygonWithPlane(temp, bary, num, v0[3] + v0[1], d1[3] + d1[1], d2[3] + d2[1]);
-        num = clipPolygonWithPlane(bary, temp, num, v0[3] - v0[1], d1[3] - d1[1], d2[3] - d2[1]);
+        num = clipPolygonWithPlane(temp, bary, num, v0.w + v0.y, d1.w + d1.y, d2.w + d2.y);
+        num = clipPolygonWithPlane(bary, temp, num, v0.w - v0.y, d1.w - d1.y, d2.w - d2.y);
     }
-    if ((v0[3] < fabs(v0[2])) | (v1[3] < fabs(v1[2])) | (v2[3] < fabs(v2[2])))
+    if ((v0.w < fabs(v0.z)) | (v1.w < fabs(v1.z)) | (v2.w < fabs(v2.z)))
     {
         float temp[18];
-        num = clipPolygonWithPlane(temp, bary, num, v0[3] + v0[2], d1[3] + d1[2], d2[3] + d2[2]);
-        num = clipPolygonWithPlane(bary, temp, num, v0[3] - v0[2], d1[3] - d1[2], d2[3] - d2[2]);
+        num = clipPolygonWithPlane(temp, bary, num, v0.w + v0.z, d1.w + d1.z, d2.w + d2.z);
+        num = clipPolygonWithPlane(bary, temp, num, v0.w - v0.z, d1.w - d1.z, d2.w - d2.z);
     }
     return num;
 }

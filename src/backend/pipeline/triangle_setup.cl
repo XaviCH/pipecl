@@ -20,7 +20,7 @@
  *
  * @todo benchmark local enqueueing for subtriangles and global flush at the end.
  */
-inline void triangle_setup(
+void triangle_setup(
     global int* a_num_subtris,
 
     global triangle_header_t* g_tri_header, 
@@ -368,16 +368,29 @@ inline void setupTriangle(
     // Write triangle_data_t.
 
     if (is_render_mode_flag_enable_depth(c_render_mode)) {
-        *(global uint4*)&td->zx = (uint4)(zpleq.x, zpleq.y, zpleq.z, zslope);
+        td->zx = zpleq.x; 
+        td->zy = zpleq.y; 
+        td->zb = zpleq.z; 
+        td->zslope = zslope;
     }
     if (is_render_mode_flag_enable_lerp(c_render_mode)) {
-        *(global uint4*)&td->wx = (uint4)(wpleq.x, wpleq.y, wpleq.z, upleq.x);
-        *(global uint4*)&td->uy = (uint4)(upleq.y, upleq.z, vpleq.x, vpleq.y);
-        *(global uint4*)&td->vb = (uint4)(vpleq.z, vidx.x, vidx.y, vidx.z);
+        td->wx = wpleq.x; 
+        td->wy = wpleq.y; 
+        td->wb = wpleq.z;
+
+        td->ux = upleq.x; 
+        td->uy = upleq.y; 
+        td->ub = upleq.z;
+
+        td->vx = vpleq.x; td->vy = vpleq.y; td->vb = vpleq.z;
+        td->vi0 = vidx.x; td->vi1 = vidx.y; td->vi2 = vidx.z;
     }
     else
     {
-        *(global uint4*)&td->vb = (uint4)(0, vidx.x, vidx.y, vidx.z);
+        td->vb = 0;
+        td->vi0 = vidx.x; 
+        td->vi1 = vidx.y; 
+        td->vi2 = vidx.z;
     }
 
     // Determine flipbits.
@@ -387,13 +400,12 @@ inline void setupTriangle(
     uint f20 = cover8x8_selectFlips(-d2.x, -d2.y);
 
     // Write triangle_header_t.
-    *(global uint4*)th = (uint4)(
-        prmt(p0.x, p0.y, 0x5410),
-        prmt(p1.x, p1.y, 0x5410),
-        prmt(p2.x, p2.y, 0x5410),
-        (zmin & 0xfffff000u) | (f01 << 6) | (f12 << 2) | (f20 >> 2));
+    th->v0x = p0.x; th->v0y = p0.y;
+    th->v1x = p1.x; th->v1y = p1.y;
+    th->v2x = p2.x; th->v2y = p2.y;
+    th->misc.misc = (zmin & 0xfffff000u) | (f01 << 6) | (f12 << 2) | (f20 >> 2);
 
-    triangle_header_misc_t th_misc = th->misc; 
+    triangle_header_misc_t th_misc = th->misc;
     set_th_misc_face(&th_misc, face);
     set_th_misc_primitive_config(&th_misc, c_primitive_config);
     th->misc = th_misc;
@@ -528,7 +540,7 @@ inline void triangle_setup(
     float4 ov0 = v0;
     float4 od1 = (float4)(v1.x - v0.x, v1.y - v0.y, v1.z - v0.z, v1.w - v0.w);
     float4 od2 = (float4)(v2.x - v0.x, v2.y - v0.y, v2.z - v0.z, v2.w - v0.w);
-    int numVerts = clipTriangleWithFrustum(bary, (float*) &ov0, (float*) &v1, (float*) &v2, (float*) &od1, (float*) &od2);
+    int numVerts = clipTriangleWithFrustum(bary, ov0, v1, v2, od1, od2);
 
     v0.x = ov0.x + od1.x * bary[0] + od2.x * bary[1];
     v0.y = ov0.y + od1.y * bary[0] + od2.y * bary[1];
