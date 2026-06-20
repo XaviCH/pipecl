@@ -43,6 +43,12 @@ typedef struct {
     uint32_t colorbuffer_mode;
     uint32_t width, height;
     size_t bin_queue_id;
+
+    device_event_t vertex_attributes_write_event;
+    device_event_t vertex_attribute_data_write_event;
+    device_event_t fragment_uniform_write_event;
+    device_event_t rop_config_write_event;
+    rop_config_t pending_rop_config;
 } orch_framebuffer_handler_t;
 
 typedef struct {

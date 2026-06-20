@@ -4,6 +4,7 @@
 #include <types.device.h>
 
 // TODO: impl structs on impl file not on header
+typedef cl_event device_event_t;
 
 typedef struct {
     cl_kernel kernel;
@@ -334,39 +335,42 @@ void device_launch_fragment_shader(
 );
 
 // device context writers
-// TODO: write api return an event handler, to do async writing
+
+void device_wait_event(device_event_t event);
+
+void device_release_event(device_event_t event);
 
 // TODO: textures are not implemented for vertex
-void device_write_fragment_texture_datas(
-    device_context_t* context, 
+device_event_t device_write_fragment_texture_datas(
+    device_context_t* context,
     const texture_data_t texture_datas[DEVICE_TEXTURE_UNITS]
 );
 
-void device_write_fragment_uniform(
+device_event_t device_write_fragment_uniform(
     device_context_t* context,
     size_t primitive_id,
     const uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY]
 );
 
-void device_write_rop_config(
-    device_context_t* context, 
-    size_t primitive_id, 
+device_event_t device_write_rop_config(
+    device_context_t* context,
+    size_t primitive_id,
     rop_config_t* rop_config
 );
 
-void device_write_vertex_attribute_data(
+device_event_t device_write_vertex_attribute_data(
     device_context_t* context,
     vertex_attribute_data_t vertex_attribute_data[DEVICE_VERTEX_ATTRIBUTE_SIZE]
 );
 
-void device_write_vertex_attributes(
-    device_context_t* context, 
+device_event_t device_write_vertex_attributes(
+    device_context_t* context,
     float vertex_attributes[DEVICE_VERTEX_ATTRIBUTE_SIZE][4],
     int blocking_write
 );
 
-void device_write_vertex_uniform(
-    device_context_t* context, 
+device_event_t device_write_vertex_uniform(
+    device_context_t* context,
     uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY],
     int blocking_write
 );

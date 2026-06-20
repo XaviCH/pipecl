@@ -693,7 +693,8 @@ void orch_write_vertex_attributes(
 
     device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
 
-    device_write_vertex_attributes(context, vertex_attributes, 1);
+    device_wait_event(framebuffer->vertex_attributes_write_event);
+    framebuffer->vertex_attributes_write_event = device_write_vertex_attributes(context, vertex_attributes, 0);
 }
 
 void orch_write_vertex_attribute_data(
@@ -705,7 +706,8 @@ void orch_write_vertex_attribute_data(
 
     device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
 
-    device_write_vertex_attribute_data(context, data);
+    device_wait_event(framebuffer->vertex_attribute_data_write_event);
+    framebuffer->vertex_attribute_data_write_event = device_write_vertex_attribute_data(context, data);
 }
 
 void orch_write_fragment_texture_data(
@@ -719,7 +721,8 @@ void orch_write_fragment_texture_data(
 
     __orch_flush_draw_state(orch, framebuffer);
 
-    device_write_fragment_texture_datas(context, texture_data);
+    device_event_t write_event = device_write_fragment_texture_datas(context, texture_data);
+    device_wait_event(write_event);
 }
 
 void orch_write_fragment_data(
@@ -737,8 +740,12 @@ void orch_write_fragment_data(
         context = __orch_attach_new_context(orch, framebuffer, 0);
     }
 
-    device_write_fragment_uniform(context, framebuffer->loaded_configs, uniform_data);
-    device_write_rop_config(context, framebuffer->loaded_configs, &config);
+    device_wait_event(framebuffer->fragment_uniform_write_event);
+    framebuffer->fragment_uniform_write_event = device_write_fragment_uniform(context, framebuffer->loaded_configs, uniform_data);
+
+    device_wait_event(framebuffer->rop_config_write_event);
+    framebuffer->pending_rop_config = config;
+    framebuffer->rop_config_write_event = device_write_rop_config(context, framebuffer->loaded_configs, &framebuffer->pending_rop_config);
 
     framebuffer->loaded_configs += 1;
 }

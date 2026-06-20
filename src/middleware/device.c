@@ -237,7 +237,7 @@ static void __device_read_mem(
     ));
 }
 
-static void __device_write_mem(
+static device_event_t __device_write_mem(
     __device_mem_t* mem,
     cl_bool blocking_write,
     size_t offset,
@@ -263,6 +263,11 @@ static void __device_write_mem(
         NULL, 
         wait_event
     ));
+
+    if (blocking_write) return NULL;
+
+    CL_CHECK(clRetainEvent(mem->write_event));
+    return mem->write_event;
 }
 
 // TODO: Support more formats
@@ -2273,9 +2278,20 @@ void device_copy_context_last_state(device_context_t* dst, device_context_t* src
 
 //-------------------------------------------------------------------------------------
 
-// TODO: write api return an event handler, to do async writing
+void device_wait_event(device_event_t event)
+{
+    if (!event) return;
+    CL_CHECK(clWaitForEvents(1, &event));
+    CL_CHECK(clReleaseEvent(event));
+}
 
-void device_write_vertex_attribute_data(
+void device_release_event(device_event_t event)
+{
+    if (!event) return;
+    CL_CHECK(clReleaseEvent(event));
+}
+
+device_event_t device_write_vertex_attribute_data(
     device_context_t* context,
     vertex_attribute_data_t vertex_attribute_data[DEVICE_VERTEX_ATTRIBUTE_SIZE]
 ) {
@@ -2284,17 +2300,17 @@ void device_write_vertex_attribute_data(
 
     size_t idx = context->vertex_attribute_data_index;
 
-    __device_write_mem(
+    return __device_write_mem(
         &context->vertex_attribute_data_mem[idx],
-        CL_TRUE,
-        0, 
-        sizeof(vertex_attribute_data_t[DEVICE_VERTEX_ATTRIBUTE_SIZE]), 
+        CL_FALSE,
+        0,
+        sizeof(vertex_attribute_data_t[DEVICE_VERTEX_ATTRIBUTE_SIZE]),
         vertex_attribute_data
     );
 }
 
-void device_write_vertex_attributes(
-    device_context_t* context, 
+device_event_t device_write_vertex_attributes(
+    device_context_t* context,
     float vertex_attributes[DEVICE_VERTEX_ATTRIBUTE_SIZE][4],
     int blocking_write
 ) {
@@ -2303,17 +2319,17 @@ void device_write_vertex_attributes(
 
     size_t idx = context->vertex_attributes_index;
 
-    __device_write_mem(
+    return __device_write_mem(
         &context->vertex_attributes_mem[idx],
-        CL_TRUE,
-        0, 
-        sizeof(cl_float[DEVICE_VERTEX_ATTRIBUTE_SIZE][4]), 
+        blocking_write,
+        0,
+        sizeof(cl_float[DEVICE_VERTEX_ATTRIBUTE_SIZE][4]),
         vertex_attributes
     );
 }
 
-void device_write_vertex_uniform(
-    device_context_t* context, 
+device_event_t device_write_vertex_uniform(
+    device_context_t* context,
     uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY],
     int blocking_write
 ) {
@@ -2322,26 +2338,26 @@ void device_write_vertex_uniform(
 
     size_t idx = context->vertex_uniform_index;
 
-    __device_write_mem(
-        &context->vertex_uniform_mem[idx], 
-        CL_TRUE,
-        0, 
-        sizeof(cl_char[DEVICE_UNIFORM_CAPACITY]), 
+    return __device_write_mem(
+        &context->vertex_uniform_mem[idx],
+        blocking_write,
+        0,
+        sizeof(cl_char[DEVICE_UNIFORM_CAPACITY]),
         uniform_data
     );
 }
 
-void device_write_rop_config(
-    device_context_t* context, 
-    size_t primitive_id, 
+device_event_t device_write_rop_config(
+    device_context_t* context,
+    size_t primitive_id,
     rop_config_t* rop_config
 ) {
-    size_t size = sizeof(rop_config_t); 
-    size_t offset = primitive_id * size; 
+    size_t size = sizeof(rop_config_t);
+    size_t offset = primitive_id * size;
 
-    __device_write_mem(
-        &context->rop_configs_mem, 
-        CL_TRUE, 
+    return __device_write_mem(
+        &context->rop_configs_mem,
+        CL_FALSE,
         offset,
         size,
         rop_config
@@ -2349,15 +2365,15 @@ void device_write_rop_config(
 }
 
 // TODO: textures are not implemented for vertex
-void device_write_fragment_texture_datas(
-    device_context_t* context, 
+device_event_t device_write_fragment_texture_datas(
+    device_context_t* context,
     const texture_data_t texture_datas[DEVICE_TEXTURE_UNITS]
 ) {
-    size_t size = sizeof(texture_data_t[DEVICE_TEXTURE_UNITS]); 
+    size_t size = sizeof(texture_data_t[DEVICE_TEXTURE_UNITS]);
 
-    __device_write_mem(
+    device_event_t write_event = __device_write_mem(
         &context->fragment_texture_datas_mem,
-        CL_TRUE,
+        CL_FALSE,
         0,
         size,
         texture_datas
@@ -2370,20 +2386,22 @@ void device_write_fragment_texture_datas(
             __device_select_sampler(context->device, texture_datas[unit]);
     }
     #endif
+
+    return write_event;
 }
 
-void device_write_fragment_uniform(
+device_event_t device_write_fragment_uniform(
     device_context_t* context,
     size_t primitive_id,
     const uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY]
 ) {
-    size_t size = sizeof(uint8_t[DEVICE_UNIFORM_CAPACITY]); 
-    size_t offset = primitive_id * size; 
+    size_t size = sizeof(uint8_t[DEVICE_UNIFORM_CAPACITY]);
+    size_t offset = primitive_id * size;
 
-    __device_write_mem(
-        &context->fragment_uniform_mem, 
-        CL_TRUE, 
-        offset, 
+    return __device_write_mem(
+        &context->fragment_uniform_mem,
+        CL_FALSE,
+        offset,
         size,
         uniform_data
     );
