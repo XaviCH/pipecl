@@ -400,12 +400,13 @@ inline void setupTriangle(
     uint f20 = cover8x8_selectFlips(-d2.x, -d2.y);
 
     // Write triangle_header_t.
-    th->v0x = p0.x; th->v0y = p0.y;
-    th->v1x = p1.x; th->v1y = p1.y;
-    th->v2x = p2.x; th->v2y = p2.y;
-    th->misc.misc = (zmin & 0xfffff000u) | (f01 << 6) | (f12 << 2) | (f20 >> 2);
+    th->v[0] = prmt(p0.x, p0.y, 0x5410);
+    th->v[1] = prmt(p1.x, p1.y, 0x5410);
+    th->v[2] = prmt(p2.x, p2.y, 0x5410);
 
-    triangle_header_misc_t th_misc = th->misc;
+    // Build misc in a private value (no global read-back) and store it once.
+    triangle_header_misc_t th_misc;
+    th_misc.misc = (zmin & 0xfffff000u) | (f01 << 6) | (f12 << 2) | (f20 >> 2);
     set_th_misc_face(&th_misc, face);
     set_th_misc_primitive_config(&th_misc, c_primitive_config);
     th->misc = th_misc;

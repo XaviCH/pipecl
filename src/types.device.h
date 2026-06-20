@@ -153,12 +153,17 @@ inline void set_th_misc_zmin(triangle_header_misc_t *th_misc, cl_ushort zmin)
 
 typedef struct
 {
-    cl_short v0x; // Subpixels relative to viewport center. Valid if triSubtris = 1.
-    cl_short v0y;
-    cl_short v1x;
-    cl_short v1y;
-    cl_short v2x;
-    cl_short v2y;
+    union {
+        cl_uint  v[3];
+        struct {
+            cl_short v0x;
+            cl_short v0y;
+            cl_short v1x;
+            cl_short v1y;
+            cl_short v2x;
+            cl_short v2y;
+        };
+    };
 
     triangle_header_misc_t misc; // triSubtris=1: (zmin:20, f01:4, f12:4, f20:4), triSubtris>=2: (subtriBase)
 } triangle_header_t;
