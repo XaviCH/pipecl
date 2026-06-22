@@ -16,6 +16,8 @@
     #define NDEBUG
 #endif
 
+#define PERF_MODE 1
+
 // -----------
 // device architecture description
 // -----------
@@ -78,6 +80,8 @@
 // max number of vertices with varying attributes could be rastired
 #define DEVICE_VERTICES_SIZE (1UL << 16)
 #define DEVICE_VARYING_SIZE 2
+
+#define DEVICE_INDEX_BUFFER_CACHE_BYTES (16 * 1024)
 
 // ------
 // kernel configuration

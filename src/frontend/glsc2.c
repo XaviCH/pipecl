@@ -131,13 +131,16 @@ static vertex_attribute_binding_t   vertex_attribute_binding    [DEVICE_VERTEX_A
 static uint8_t                  texture_unit_updated;
 static size_t                   active_texture_unit;
 static size_t                   texture_unit_bindings    [DEVICE_TEXTURE_UNITS];
+static texture_data_t           _texture_datas           [DEVICE_TEXTURE_UNITS];
+
 static size_t                   _texture_sz;
 static size_t                   _texture_binding;
-static gl_texture_t                _textures                [HOST_TEXTURES_SIZE];
+static gl_texture_t             _textures                [HOST_TEXTURES_SIZE];
 
 static uint8_t                  rop_config_updated;
+static uint8_t                  _vertex_uniform_data_updated;
+static uint8_t                  _fragment_uniform_data_updated;
 
-static uint8_t                  _uniform_data_updated;
 static size_t                   _current_program;
 static size_t                   _program_sz;
 static gl_program_t                _programs                [HOST_PROGRAMS_SIZE];
@@ -708,17 +711,15 @@ static void write_gl_state_to_orch(GLenum draw_mode)
         vertex_attibute_updated = 0;
     }
 
-    if (texture_unit_updated) 
+    if (texture_unit_updated)
     {
-        texture_data_t texture_datas[DEVICE_TEXTURE_UNITS];
-
         for (size_t i = 0; i < DEVICE_TEXTURE_UNITS; ++i)
         {
             if (texture_unit_bindings[i] == 0) continue;
 
             gl_texture_t *texture = &_textures[texture_unit_bindings[i]-1];
 
-            texture_data_t *texture_data = &texture_datas[i];
+            texture_data_t *texture_data = &_texture_datas[i];
 
             set_texture_data_mode(
                 texture_data, 
@@ -756,7 +757,7 @@ static void write_gl_state_to_orch(GLenum draw_mode)
             );
         }
 
-        orch_write_fragment_texture_data(orch, framebuffer->id, texture_datas);
+        orch_write_fragment_texture_data(orch, framebuffer->id, _texture_datas);
 
         for (size_t unit = 0; unit < DEVICE_TEXTURE_UNITS; ++unit)
         {
@@ -775,12 +776,18 @@ static void write_gl_state_to_orch(GLenum draw_mode)
         texture_unit_updated = 0;
     }
     
-    if (rop_config_updated || _uniform_data_updated)
+    if (rop_config_updated || _fragment_uniform_data_updated)
     {
         rop_config_t rop_config = get_rop_config(draw_mode);
         orch_write_fragment_data(orch, framebuffer->id, _programs[_current_program-1].uniform_data, rop_config);
         rop_config_updated = 0;
-        _uniform_data_updated = 0;
+        _vertex_uniform_data_updated = 0;
+        _fragment_uniform_data_updated = 0;
+    }
+    else if (_vertex_uniform_data_updated)
+    {
+        orch_write_vertex_data(orch, framebuffer->id, _programs[_current_program-1].uniform_data);
+        _vertex_uniform_data_updated = 0;
     }
 }
 
@@ -2453,7 +2460,11 @@ static void set_uniform_data(GLint location, size_t size, const void* data)
     gl_program_t *program = gl_get_current_program();
     // printf("location=%d offset=%d, size=%ld, data*=%d\n",location, program->uniform_arg_datas[location].offset, size, *((uint32_t*)data));
     memcpy(program->uniform_data + program->uniform_arg_datas[location].offset, data, size);
-    _uniform_data_updated = 1;
+
+    if (program->uniform_arg_datas[location].vertex_location != ARG_LOCATION_NONE)
+        _vertex_uniform_data_updated = 1;
+    if (program->uniform_arg_datas[location].fragment_location != ARG_LOCATION_NONE)
+        _fragment_uniform_data_updated = 1;
 }
 
 static GLboolean is_valid_arg_size_type(arg_data_t* arg_data, size_t size, GLenum type)

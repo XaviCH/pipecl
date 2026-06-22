@@ -2,6 +2,10 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#if PERF_MODE
+    #include <time.h>
+#endif
 
 #define DEFINE_EXTERN_KERNEL(_NAME) \
     extern unsigned char _NAME##_o[]; \
@@ -54,6 +58,59 @@ DEFINE_EXTERN_KERNEL(readnpixels);
     _LEFT = __VA_ARGS__; \
     CL_PANIC(#__VA_ARGS__, _error) \
 }
+
+#if PERF_MODE
+
+    static double __device_now_ms(void)
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (double) ts.tv_sec * 1e3 + (double) ts.tv_nsec / 1e6;
+    }
+
+    static struct {
+        int           initialized;
+        int           enabled;
+        unsigned long flushes;     // full draw-state flushes (bin+coarse+fine)
+        unsigned long draws;       // draw calls issued
+        double        last_report_s;
+    } g_sync;
+
+    static int __device_sync_enabled(void)
+    {
+        if (!g_sync.initialized)
+        {
+            const char* e = getenv("PIPECL_SYNC");
+            g_sync.enabled = (e && e[0] && e[0] != '0');
+            g_sync.last_report_s = __device_now_ms() / 1e3;
+            g_sync.initialized = 1;
+        }
+        return g_sync.enabled;
+    }
+
+    static void __device_sync_tick(void)
+    {
+        if (!g_sync.enabled) return;
+        double now_s = __device_now_ms() / 1e3;
+        if (now_s - g_sync.last_report_s >= 1.0)
+        {
+            fprintf(stderr, "SYNC: flushes=%-5lu draws=%-6lu (%.1f draws/flush)\n",
+                g_sync.flushes, g_sync.draws,
+                g_sync.flushes ? (double) g_sync.draws / g_sync.flushes : 0.0);
+            g_sync.flushes = 0; g_sync.draws = 0;
+            g_sync.last_report_s = now_s;
+        }
+    }
+
+    void device_sync_count_flush(void) { if (__device_sync_enabled()) g_sync.flushes += 1; }
+    void device_sync_count_draw(void)  { if (__device_sync_enabled()) { g_sync.draws += 1; __device_sync_tick(); } }
+
+#else // !PERF_MODE
+
+    void device_sync_count_flush(void) {}
+    void device_sync_count_draw(void)  {}
+
+#endif // PERF_MODE
 
 // methods
 
@@ -506,6 +563,20 @@ static device_arg_type_t __device_get_arg_type_from_name_type(const char* name_t
     #endif
 }
 
+static int __device_uniform_in_stage(cl_kernel kernel, const char* name)
+{
+    cl_uint num_args;
+    CL_CHECK(clGetKernelInfo(kernel, CL_KERNEL_NUM_ARGS, sizeof(cl_uint), &num_args, NULL));
+
+    char arg_name[128];
+    for (cl_uint a = 0; a + 1 < num_args; ++a)
+    {
+        CL_CHECK(clGetKernelArgInfo(kernel, a, CL_KERNEL_ARG_NAME, sizeof(arg_name), &arg_name, NULL));
+        if (strcmp(arg_name, name) == 0) return 1;
+    }
+    return 0;
+}
+
 static void __device_set_framebuffer_data(
     gl_framebuffer_data_t* fb_data,
     size_t colorbuffer_id, 
@@ -781,6 +852,7 @@ void device_init_context(
         __device_init_mem(device, &context->vertex_attributes_mem[i],       CL_MEM_READ_ONLY, sizeof(cl_float4[DEVICE_VERTEX_ATTRIBUTE_SIZE]), NULL);
         __device_init_mem(device, &context->vertex_attribute_data_mem[i],   CL_MEM_READ_ONLY, sizeof(vertex_attribute_data_t[DEVICE_VERTEX_ATTRIBUTE_SIZE]), NULL);
         __device_init_mem(device, &context->vertex_uniform_mem[i],          CL_MEM_READ_ONLY, DEVICE_UNIFORM_CAPACITY, NULL);
+        __device_init_mem(device, &context->index_buffer_cache[i],          CL_MEM_READ_ONLY, DEVICE_INDEX_BUFFER_CACHE_BYTES, NULL);
     }
 
     // Fragment context objects
@@ -1171,6 +1243,8 @@ size_t device_create_program_from_binary(device_t* device, size_t size, const un
     CL_ASSIGN_CHECK(kernels->vertex.kernel,         clCreateKernel(program, "gl_vertex_shader",             error));
     CL_ASSIGN_CHECK(kernels->fragment,              clCreateKernel(program, "fine_raster_single_sample",    error));
     CL_ASSIGN_CHECK(kernels->uniform_data,          clCreateKernel(program, "gl_uniform_data",              error));
+    CL_ASSIGN_CHECK(kernels->vs_uniform_data,       clCreateKernel(program, "gl_vs_uniform_data",           error));
+    CL_ASSIGN_CHECK(kernels->fs_uniform_data,       clCreateKernel(program, "gl_fs_uniform_data",           error));
     CL_ASSIGN_CHECK(kernels->attribute_data,        clCreateKernel(program, "gl_attribute_data",            error));
     CL_ASSIGN_CHECK(kernels->varying_data,          clCreateKernel(program, "gl_varying_data",              error));
 
@@ -1192,7 +1266,8 @@ size_t device_create_program_from_binary(device_t* device, size_t size, const un
 // Device getter functions
 void device_get_program_uniform_arg_data(device_t* shared, size_t program_id, size_t location, arg_data_t* arg_data) 
 {
-    cl_kernel kernel = shared->shaders[program_id].uniform_data;
+    __device_shader_kernels_t* kernels = &shared->shaders[program_id];
+    cl_kernel kernel = kernels->uniform_data;
 
     char name[128];
     char type_name[32];
@@ -1203,9 +1278,16 @@ void device_get_program_uniform_arg_data(device_t* shared, size_t program_id, si
     arg_data->size = __device_get_size_from_name_type(type_name);
     arg_data->type = __device_get_arg_type_from_name_type(type_name);
     strcpy(arg_data->name, name);
+
+    int in_vs = __device_uniform_in_stage(kernels->vs_uniform_data, name);
+    int in_fs = __device_uniform_in_stage(kernels->fs_uniform_data, name);
+    int untagged = !in_vs && !in_fs;
+
+    arg_data->vertex_location   = (in_vs            ) ? (unsigned int) location : ARG_LOCATION_NONE;
+    arg_data->fragment_location = (in_fs || untagged) ? (unsigned int) location : ARG_LOCATION_NONE;
 }
 
-size_t device_get_program_uniform_size(device_t* device, size_t program_id) 
+size_t device_get_program_uniform_size(device_t* device, size_t program_id)
 {
     cl_kernel kernel = device->shaders[program_id].uniform_data;
 
@@ -1215,7 +1297,7 @@ size_t device_get_program_uniform_size(device_t* device, size_t program_id)
     return uniform_size - 1;
 }
 
-void device_get_program_vertex_attrib_arg_data(device_t* device, size_t program_id, size_t location, arg_data_t* arg_data) 
+void device_get_program_vertex_attrib_arg_data(device_t* device, size_t program_id, size_t location, arg_data_t* arg_data)
 {
     cl_kernel kernel = device->shaders[program_id].attribute_data;
 
@@ -1687,12 +1769,26 @@ void device_launch_range_triangle_assembly(
 ) {
     cl_kernel kernel = context->device->triangle_setup_range_kernel;
 
+    size_t qidx = __device_get_vertex_command_index(context);
     cl_command_queue queue = __device_get_vertex_command_queue(context);
 
     cl_mem g_index_buffer;
-    CL_ASSIGN_CHECK(g_index_buffer, clCreateBuffer(
-            context->device->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(cl_ushort[size]), (void*) ptr, error
-    ));
+    size_t index_bytes = sizeof(cl_ushort[size]);
+    int    index_buffer_to_device = index_bytes <= DEVICE_INDEX_BUFFER_CACHE_BYTES;
+
+    __device_mem_t* index_mem;
+    if (index_buffer_to_device)
+    {
+        index_mem = &context->index_buffer_cache[qidx];
+        __device_write_mem(index_mem, CL_TRUE, 0, index_bytes, ptr);
+        g_index_buffer = __device_acquire_mem(index_mem, queue);
+    }
+    else
+    {
+        CL_ASSIGN_CHECK(g_index_buffer, clCreateBuffer(
+            context->device->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, index_bytes, (void*) ptr, error
+        ));
+    }
 
     __device_acquire_mem(&context->a_num_subtris,  queue);
 
@@ -1729,7 +1825,8 @@ void device_launch_range_triangle_assembly(
     }
     #endif
 
-    CL_CHECK(clReleaseMemObject(g_index_buffer));
+    if (index_buffer_to_device) __device_barrier_mem(index_mem, wait_event);
+    else                        CL_CHECK(clReleaseMemObject(g_index_buffer));
 
     CL_CHECK(clEnqueueBarrierWithWaitList(context->raster_command_queue, 1, &wait_event, NULL));
     CL_CHECK(clReleaseEvent(wait_event));

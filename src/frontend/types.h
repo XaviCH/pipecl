@@ -33,17 +33,6 @@ typedef union {
     vertex_attrib_pointer_t pointer;
 } vertex_attrib_u;
 
-/*
-typedef struct {
-    unsigned int vertex_location, fragment_location, size, type, offset;
-    char name[128]; 
-} arg_data_t;
-*/
-
-typedef struct { 
-    GLboolean last_load_attempt, last_validation_attempt;
-    unsigned char log[128];
-} program_data_t;
 
 typedef struct {
     // Program data

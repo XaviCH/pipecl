@@ -1,6 +1,7 @@
 #include <middleware/orchestrator.h>
 
 #include <stdio.h>
+#include <string.h>
 
 #define ERROR(ERR, MSG, ...) \
     { \
@@ -77,8 +78,7 @@ static uint8_t __orch_require_flush_vertices(orch_framebuffer_handler_t* framebu
 
     if (framebuffer->draw_state.last_config_id != config_id) return 1;
 
-    return 1;
-    // return 0; TODO: check logic to optimize and do not always flush
+    return 0;
 }
 
 typedef enum {
@@ -215,6 +215,7 @@ static void __orch_flush_draw_state(orch_handler_t* orch, orch_framebuffer_handl
     framebuffer->draw_state.assembled_vertices   = 0;
     framebuffer->clear_state.enabled = (enabled_data_t) {0};
 
+    device_sync_count_flush();
 }
 
 static void __orch_flush_clear_state(orch_handler_t* orch, orch_framebuffer_handler_t* framebuffer)
@@ -371,21 +372,21 @@ static void __orch_draw_vertices(
         }
     }
 
-    if (__orch_require_flush_vertices(framebuffer, mode, num_vertices))
+    size_t last_config_id = framebuffer->loaded_configs - 1;
+
+    if (__orch_require_flush_vertices(framebuffer, mode, last_config_id))
     {
         __orch_flush_vertices(orch, framebuffer);
     }
 
-    size_t last_config_id = framebuffer->loaded_configs - 1;
-
     device_launch_vertex_shader(
         context,
         shader_id,
-        init, 
+        init,
         end,
         framebuffer->draw_state.assembled_vertices,
         last_config_id,
-        1
+        !framebuffer->use_vertex_uniform
     );
 
     framebuffer->draw_state.last_render_mode = mode;
@@ -740,14 +741,37 @@ void orch_write_fragment_data(
         context = __orch_attach_new_context(orch, framebuffer, 0);
     }
 
-    device_wait_event(framebuffer->fragment_uniform_write_event);
-    framebuffer->fragment_uniform_write_event = device_write_fragment_uniform(context, framebuffer->loaded_configs, uniform_data);
+    size_t slot = framebuffer->loaded_configs;
 
-    device_wait_event(framebuffer->rop_config_write_event);
-    framebuffer->pending_rop_config = config;
-    framebuffer->rop_config_write_event = device_write_rop_config(context, framebuffer->loaded_configs, &framebuffer->pending_rop_config);
+    device_wait_event(framebuffer->fragment_uniform_write_event[slot]);
+    memcpy(framebuffer->uniform_staging[slot], uniform_data, DEVICE_UNIFORM_CAPACITY);
+    framebuffer->fragment_uniform_write_event[slot] = device_write_fragment_uniform(context, slot, framebuffer->uniform_staging[slot]);
+
+    device_wait_event(framebuffer->rop_config_write_event[slot]);
+    framebuffer->rop_config_staging[slot] = config;
+    framebuffer->rop_config_write_event[slot] = device_write_rop_config(context, slot, &framebuffer->rop_config_staging[slot]);
+
+    framebuffer->use_vertex_uniform = 0;
 
     framebuffer->loaded_configs += 1;
+}
+
+void orch_write_vertex_data(
+    orch_handler_t* orch,
+    size_t framebuffer_id,
+    uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY]
+) {
+    orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
+
+    device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
+
+    size_t slot = framebuffer->vertex_uniform_staging_slot;
+    device_wait_event(framebuffer->vertex_uniform_write_event[slot]);
+    memcpy(framebuffer->vertex_uniform_staging[slot], uniform_data, DEVICE_UNIFORM_CAPACITY);
+    framebuffer->vertex_uniform_write_event[slot] = device_write_vertex_uniform(context, framebuffer->vertex_uniform_staging[slot], 0);
+    framebuffer->vertex_uniform_staging_slot = (slot + 1) % DEVICE_VERTEX_COMMAND_QUEUE_SIZE;
+
+    framebuffer->use_vertex_uniform = 1;
 }
 
 // Work functions
@@ -761,6 +785,8 @@ void orch_draw_arrays(
     uint32_t end
 ) {
     orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
+
+    device_sync_count_draw();
 
     __orch_draw_vertices(orch, framebuffer, shader_id, mode, init, end);
 
@@ -782,6 +808,8 @@ void orch_draw_range(
     const uint16_t* ptr
 ) {
     orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
+
+    device_sync_count_draw();
 
     __orch_draw_vertices(orch, framebuffer, shader_id, mode, init, end);
 

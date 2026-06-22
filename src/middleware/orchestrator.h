@@ -46,9 +46,16 @@ typedef struct {
 
     device_event_t vertex_attributes_write_event;
     device_event_t vertex_attribute_data_write_event;
-    device_event_t fragment_uniform_write_event;
-    device_event_t rop_config_write_event;
-    rop_config_t pending_rop_config;
+
+    uint8_t        uniform_staging              [TRIANGLE_PRIMITIVE_CONFIGS][DEVICE_UNIFORM_CAPACITY];
+    rop_config_t   rop_config_staging           [TRIANGLE_PRIMITIVE_CONFIGS];
+    device_event_t fragment_uniform_write_event [TRIANGLE_PRIMITIVE_CONFIGS];
+    device_event_t rop_config_write_event       [TRIANGLE_PRIMITIVE_CONFIGS];
+
+    uint8_t        use_vertex_uniform;
+    size_t         vertex_uniform_staging_slot;
+    uint8_t        vertex_uniform_staging       [DEVICE_VERTEX_COMMAND_QUEUE_SIZE][DEVICE_UNIFORM_CAPACITY];
+    device_event_t vertex_uniform_write_event   [DEVICE_VERTEX_COMMAND_QUEUE_SIZE];
 } orch_framebuffer_handler_t;
 
 typedef struct {
@@ -202,10 +209,16 @@ void orch_write_fragment_texture_data(
 );
 
 void orch_write_fragment_data(
-    orch_handler_t* orch, 
-    size_t framebuffer_id, 
+    orch_handler_t* orch,
+    size_t framebuffer_id,
     uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY],
     rop_config_t config
+);
+
+void orch_write_vertex_data(
+    orch_handler_t* orch,
+    size_t framebuffer_id,
+    uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY]
 );
 
 #endif // MIDDLEWARE_ORCHESTRATOR_H

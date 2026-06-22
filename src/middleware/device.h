@@ -14,7 +14,7 @@ typedef struct {
 
 typedef struct {
     __device_vertex_shader_data_t vertex;
-    cl_kernel fragment, uniform_data, attribute_data, varying_data;
+    cl_kernel fragment, uniform_data, vs_uniform_data, fs_uniform_data, attribute_data, varying_data;
 } __device_shader_kernels_t;
 
 typedef struct {
@@ -47,6 +47,8 @@ typedef struct {
     __device_mem_t sample_image;
     #endif
 } __device_texture_t;
+
+#define ARG_LOCATION_NONE ((unsigned int)-1)
 
 typedef struct {
     unsigned int vertex_location, fragment_location, size, type, offset;
@@ -160,8 +162,8 @@ typedef struct {
     cl_sampler              fragment_texture_samplers       [DEVICE_TEXTURE_UNITS];
     #endif
     __device_mem_t          fragment_uniform_mem;                                           // sizeof(cl_uchar[TRIANGLE_PRIMITIVE_CONFIGS][DEVICE_UNIFORM_CAPACITY])
-    // cl_mem                  fragment_uniform_subbuffer_mems [TRIANGLE_PRIMITIVE_CONFIGS];    // subbuffers for vertex shader, TODO: do not use sub-buffers in OpenCL
     __device_mem_t          rop_configs_mem;                                                // sizeof(rop_config_t[TRIANGLE_PRIMITIVE_CONFIGS])
+    __device_mem_t          index_buffer_cache          [DEVICE_VERTEX_COMMAND_QUEUE_SIZE];
 
 } device_context_t;
 
@@ -337,6 +339,10 @@ void device_launch_fragment_shader(
 // device context writers
 
 void device_wait_event(device_event_t event);
+
+// sync profiler counters, enabled with PIPECL_SYNC=1
+void device_sync_count_flush(void);
+void device_sync_count_draw(void);
 
 void device_release_event(device_event_t event);
 
