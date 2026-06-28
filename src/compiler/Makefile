@@ -16,10 +16,10 @@ LIBS += -lOpenCL
 all: clc.o glslc.o
 
 clc.o: clc.c $(HEADER_FILES)
-	$(CC) -c $@ $< $(INCLUDES)
+	$(CC) -o $@ -c $< $(INCLUDES)
 
 glslc.o: glslc.c $(HEADER_FILES)
-	$(CC) -c $@ $< $(INCLUDES) -DINSTALL_PATH="$(INSTALL_PATH)"
+	$(CC) -o $@ -c $< $(INCLUDES) -DINSTALL_PATH="$(INSTALL_PATH)"
 
 clean:
 	rm -f *.o

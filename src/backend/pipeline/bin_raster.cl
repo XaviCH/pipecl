@@ -439,7 +439,7 @@ void bin_raster(
             if (ofs & (CR_BIN_SEG_SIZE-1)) {
                 int seg = ofs >> CR_BIN_SEG_LOG2;
                 g_bin_seg_count[seg] = ofs & (CR_BIN_SEG_SIZE-1);
-                s_out_ofs[local_id] = (ofs - CR_BIN_SEG_SIZE - 1) & -CR_BIN_SEG_SIZE;
+                s_out_ofs[local_id] = (ofs + CR_BIN_SEG_SIZE - 1) & -CR_BIN_SEG_SIZE;
             }
         }
     }
