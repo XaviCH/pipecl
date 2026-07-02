@@ -3,7 +3,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#if PERF_MODE
+#if DEVICE_PERF_MODE
+    #include <unistd.h>
     #include <time.h>
 #endif
 
@@ -59,7 +60,7 @@ DEFINE_EXTERN_KERNEL(readnpixels);
     CL_PANIC(#__VA_ARGS__, _error) \
 }
 
-#if PERF_MODE
+#if DEVICE_PERF_MODE
 
     static double __device_now_ms(void)
     {
@@ -105,12 +106,12 @@ DEFINE_EXTERN_KERNEL(readnpixels);
     void device_sync_count_flush(void) { if (__device_sync_enabled()) g_sync.flushes += 1; }
     void device_sync_count_draw(void)  { if (__device_sync_enabled()) { g_sync.draws += 1; __device_sync_tick(); } }
 
-#else // !PERF_MODE
+#else // !DEVICE_PERF_MODE
 
     void device_sync_count_flush(void) {}
     void device_sync_count_draw(void)  {}
 
-#endif // PERF_MODE
+#endif // DEVICE_PERF_MODE
 
 // methods
 
@@ -120,6 +121,7 @@ static size_t __device_get_sizeof_texel(cl_image_format* image_format)
     switch (image_format->image_channel_order) {
         case CL_R:
         case CL_A:
+        case CL_DEPTH:
         case CL_INTENSITY:
             size = 1;
             break;
@@ -301,23 +303,23 @@ static device_event_t __device_write_mem(
     size_t size,
     const void* data
 ) {
-    if (mem->write_event) 
+    if (mem->write_event)
     {
         CL_CHECK(clReleaseEvent(mem->write_event));
         mem->write_event = NULL;
     }
 
     cl_event* wait_event = blocking_write ? NULL : &mem->write_event;
-    
+
     CL_CHECK(clEnqueueWriteBuffer(
         mem->queue,
-        mem->mem, 
-        blocking_write, 
-        offset, 
-        size, 
-        data, 
-        0, 
-        NULL, 
+        mem->mem,
+        blocking_write,
+        offset,
+        size,
+        data,
+        0,
+        NULL,
         wait_event
     ));
 
@@ -325,6 +327,12 @@ static device_event_t __device_write_mem(
 
     CL_CHECK(clRetainEvent(mem->write_event));
     return mem->write_event;
+}
+
+static void __device_reset_mem(__device_mem_t* mem, size_t size, const void* value)
+{
+    device_event_t event = __device_write_mem(mem, CL_FALSE, 0, size, value);
+    if (event) CL_CHECK(clReleaseEvent(event));
 }
 
 // TODO: Support more formats
@@ -403,6 +411,24 @@ static void __device_barrier_mem(
     cl_event event
 ) {
     CL_CHECK(clEnqueueBarrierWithWaitList(mem->queue, 1, &event, NULL));
+}
+
+static void __device_vertex_stage_wait(device_context_t* context, cl_command_queue queue)
+{
+    if (context->vertex_stage_event)
+    {
+        CL_CHECK(clEnqueueBarrierWithWaitList(queue, 1, &context->vertex_stage_event, NULL));
+    }
+}
+
+static void __device_vertex_stage_publish(device_context_t* context, cl_event event)
+{
+    if (context->vertex_stage_event)
+    {
+        CL_CHECK(clReleaseEvent(context->vertex_stage_event));
+    }
+    CL_CHECK(clRetainEvent(event));
+    context->vertex_stage_event = event;
 }
 
 
@@ -556,8 +582,9 @@ static device_arg_type_t __device_get_arg_type_from_name_type(const char* name_t
     printf("ERROR: not found type for type name=%s\n", name_type);
 
     #ifndef NDEBUG
-    printf("%s\n", name_type);
-    DEVICE_UNSUPORTED_MAPING();
+    // printf("%s\n", name_type);
+    // DEVICE_UNSUPORTED_MAPING();
+    return DEVICE_ARG_TYPE_ERROR;
     #else
     return DEVICE_ARG_TYPE_ERROR;
     #endif
@@ -613,8 +640,9 @@ static void __device_set_framebuffer_data(
 
 // ---------------------------------------------------------------
 
-static const cl_uint  max_number_triangles = 1;// __device_get_max_number_triangles();
-static cl_int   ZERO = 0;
+// used for resetting memory atomic values
+static const cl_int   ZERO                  = 0;
+static const cl_uint  MAX_NUMBER_TRIANGLES  = DEVICE_MAX_NUMBER_TRIANGLES;
 
 // ---------------------------------------------------------------
 
@@ -719,7 +747,8 @@ void device_init(device_t* shared)
     CL_CHECK(clBuildProgram(shared->read_pixels_program, 1, &shared->device_id, NULL, NULL, NULL));
 
     // Create kernels
-    CL_ASSIGN_CHECK(shared->triangle_setup_arrays_kernel,   clCreateKernel(shared->triangle_setup_program,  "triangle_setup_arrays",    error));
+    CL_ASSIGN_CHECK(shared->triangle_setup_arrays_kernel,       clCreateKernel(shared->triangle_setup_program,  "triangle_setup_arrays",        error));
+    CL_ASSIGN_CHECK(shared->triangle_setup_arrays_block_kernel, clCreateKernel(shared->triangle_setup_program,  "triangle_setup_arrays_block",  error));
     CL_ASSIGN_CHECK(shared->triangle_setup_range_kernel,    clCreateKernel(shared->triangle_setup_program,  "triangle_setup_range",     error));
     CL_ASSIGN_CHECK(shared->bin_raster_kernel,              clCreateKernel(shared->bin_raster_program,      "bin_raster",               error));
     CL_ASSIGN_CHECK(shared->coarse_raster_kernel,           clCreateKernel(shared->coarse_raster_program,   "coarse_raster",            error));
@@ -774,6 +803,13 @@ void device_init_context(
     CL_ASSIGN_CHECK(context->g_tri_header,      clCreateBuffer(device->context, CL_MEM_READ_WRITE, triangle_header_size,                        NULL, error));
     CL_ASSIGN_CHECK(context->g_tri_data,        clCreateBuffer(device->context, CL_MEM_READ_WRITE, triangle_data_size,                          NULL, error));     
     CL_ASSIGN_CHECK(context->g_vertex_buffer,   clCreateBuffer(device->context, CL_MEM_READ_WRITE, vertex_buffer_size,                          NULL, error));
+
+    CL_ASSIGN_CHECK(context->g_uniform_arena,      clCreateBuffer(device->context, CL_MEM_READ_ONLY, sizeof(cl_uchar[DEVICE_MAX_BATCH_DRAWS][DEVICE_UNIFORM_CAPACITY]), NULL, error));
+    CL_ASSIGN_CHECK(context->g_attribute_data_arena, clCreateBuffer(device->context, CL_MEM_READ_ONLY, sizeof(vertex_attribute_data_t[DEVICE_MAX_BATCH_DRAWS][DEVICE_VERTEX_ATTRIBUTE_SIZE]), NULL, error));
+    CL_ASSIGN_CHECK(context->g_vertex_attribute_arena, clCreateBuffer(device->context, CL_MEM_READ_ONLY, sizeof(cl_float4[DEVICE_MAX_BATCH_DRAWS][DEVICE_VERTEX_ATTRIBUTE_SIZE]), NULL, error));
+    CL_ASSIGN_CHECK(context->g_draw_start,         clCreateBuffer(device->context, CL_MEM_READ_ONLY, sizeof(cl_uint[DEVICE_MAX_BATCH_DRAWS + 1]), NULL, error)); // +1 = block sentinel
+    CL_ASSIGN_CHECK(context->g_config,             clCreateBuffer(device->context, CL_MEM_READ_ONLY, sizeof(vertex_config_t[DEVICE_MAX_BATCH_DRAWS]), NULL, error));
+    CL_ASSIGN_CHECK(context->g_setup_arena,        clCreateBuffer(device->context, CL_MEM_READ_ONLY, sizeof(setup_draw_config_t[DEVICE_MAX_BATCH_DRAWS + 1]), NULL, error)); // +1 = block sentinel
 
     #ifdef DEVICE_IMAGE_ENABLED
     {
@@ -842,14 +878,13 @@ void device_init_context(
 
     // Vertex context objects
     context->vertex_command_queue_index = 0;
-    context->vertex_attributes_index = 0;
+    context->vertex_stage_event = NULL;
     context->vertex_attribute_data_index = 0;
     context->vertex_uniform_index = 0;
 
     for (size_t i = 0; i < DEVICE_VERTEX_COMMAND_QUEUE_SIZE; ++i) {
-        CL_ASSIGN_CHECK(context->vertex_command_queues[i],      clCreateCommandQueue(device->context, device->device_id, 0, error)); 
-        
-        __device_init_mem(device, &context->vertex_attributes_mem[i],       CL_MEM_READ_ONLY, sizeof(cl_float4[DEVICE_VERTEX_ATTRIBUTE_SIZE]), NULL);
+        CL_ASSIGN_CHECK(context->vertex_command_queues[i],      clCreateCommandQueue(device->context, device->device_id, 0, error));
+
         __device_init_mem(device, &context->vertex_attribute_data_mem[i],   CL_MEM_READ_ONLY, sizeof(vertex_attribute_data_t[DEVICE_VERTEX_ATTRIBUTE_SIZE]), NULL);
         __device_init_mem(device, &context->vertex_uniform_mem[i],          CL_MEM_READ_ONLY, DEVICE_UNIFORM_CAPACITY, NULL);
         __device_init_mem(device, &context->index_buffer_cache[i],          CL_MEM_READ_ONLY, DEVICE_INDEX_BUFFER_CACHE_BYTES, NULL);
@@ -869,6 +904,11 @@ void device_init_context(
     {
         context->vertex_attribute_pointers[attribute].is_host = 0;
         context->vertex_attribute_pointers[attribute].mem.device_id = 0;
+
+        context->host_attr_snapshot[attribute].mem = NULL;
+        context->host_attr_snapshot[attribute].write_event = NULL;
+        CL_ASSIGN_CHECK(context->host_attr_snapshot[attribute].queue, clCreateCommandQueue(device->context, device->device_id, 0, error));
+        context->host_attr_snapshot_cap[attribute] = 0;
     }
 
     for (size_t texture_unit = 0; texture_unit < DEVICE_TEXTURE_UNITS; ++texture_unit)
@@ -883,39 +923,78 @@ void device_init_context(
 // ---------------------------------------------------------------
 
 // ---------------------------------------------------------------
-// Kernel argument setters
-static void __device_set_vertex_shader_kernel_args(
+// Kernel argument setters.
+
+static void __device_set_vertex_arena_args(
+    cl_kernel kernel, cl_uint* arg_idx,
+    size_t num_attributes,
+    cl_mem g_vertex_attribute,
+    cl_mem g_attribute_data_arena,
+    cl_mem g_uniform_arena,
+    cl_mem attribute_pointers[DEVICE_VERTEX_ATTRIBUTE_SIZE]
+) {
+    CL_CHECK(clSetKernelArg(kernel, (*arg_idx)++, sizeof(cl_mem), &g_vertex_attribute));
+    CL_CHECK(clSetKernelArg(kernel, (*arg_idx)++, sizeof(cl_mem), &g_attribute_data_arena));
+    CL_CHECK(clSetKernelArg(kernel, (*arg_idx)++, sizeof(cl_mem), &g_uniform_arena));
+    for (cl_uint attribute = 0; attribute < num_attributes; ++attribute)
+        CL_CHECK(clSetKernelArg(kernel, (*arg_idx)++, sizeof(cl_mem), &attribute_pointers[attribute]));
+}
+
+static void __device_set_vertex_shader_direct_args(
     cl_kernel kernel,
     device_context_t* context,
     size_t num_attributes,
     cl_mem g_vertex_attribute,
-    cl_mem g_vertex_attribute_data,
-    cl_mem g_uniforms,
+    cl_mem g_attribute_data_arena,
+    cl_mem g_uniform_arena,
     cl_mem attribute_pointers[DEVICE_VERTEX_ATTRIBUTE_SIZE],
     cl_uint c_num_vertices,
-    cl_uint primitive_id
+    cl_uint c_vertex_offset,
+    vertex_config_t c_config
 ) {
     cl_mem t_vertex_buffer = __device_get_texture_vertex_buffer(context);
-
     cl_uint arg_idx = 0;
 
+    __device_set_vertex_arena_args(kernel, &arg_idx, num_attributes, g_vertex_attribute, g_attribute_data_arena, g_uniform_arena, attribute_pointers);
+
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),          &t_vertex_buffer));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_num_vertices),  &c_num_vertices));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_vertex_offset), &c_vertex_offset));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_config),        &c_config));
+}
+
+// BLOCK: arenas + gl_draw_start (search) + per-draw config array.
+static void __device_set_vertex_shader_block_args(
+    cl_kernel kernel,
+    device_context_t* context,
+    size_t num_attributes,
+    cl_mem g_vertex_attribute,
+    cl_mem g_attribute_data_arena,
+    cl_mem g_uniform_arena,
+    cl_mem g_draw_start,
+    cl_mem g_config,
+    cl_mem attribute_pointers[DEVICE_VERTEX_ATTRIBUTE_SIZE],
+    cl_uint c_num_vertices,
+    cl_uint c_first_draw,
+    cl_uint c_num_draws,
+    cl_uint c_vertex_offset
+) {
+    cl_mem t_vertex_buffer = __device_get_texture_vertex_buffer(context);
+    cl_uint arg_idx = 0;
+
+    // Block ABI order: arenas, draw_start, configs, attribute pointers, vertex_buffer, scalars.
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &g_vertex_attribute));
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &g_vertex_attribute_data));
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &g_uniforms));
-
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &g_attribute_data_arena));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &g_uniform_arena));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &g_draw_start));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &g_config));
     for (cl_uint attribute = 0; attribute < num_attributes; ++attribute)
-    {
         CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &attribute_pointers[attribute]));
-    }
-
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &t_vertex_buffer));
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_num_vertices), &c_num_vertices));
-
-    #ifndef DEVICE_SUBBUFFER_ENABLED
-    {
-        CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(primitive_id), &primitive_id)); 
-    }
-    #endif
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),          &t_vertex_buffer));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_num_vertices),  &c_num_vertices));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_first_draw),    &c_first_draw));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_num_draws),     &c_num_draws));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_vertex_offset), &c_vertex_offset));
 }
 
 static void __device_set_triangle_setup_arrays_kernel_args(
@@ -948,8 +1027,7 @@ static void __device_set_triangle_setup_arrays_kernel_args(
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_vertex_size),          &c_vertex_size));
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_height),      &c_viewport_height));
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_width),       &c_viewport_width));
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_fragment_config_id),   &c_fragment_config_id));
-}
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_fragment_config_id),   &c_fragment_config_id));}
 
 static void __device_set_triangle_setup_range_kernel_args(
     cl_kernel kernel,
@@ -983,8 +1061,7 @@ static void __device_set_triangle_setup_range_kernel_args(
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_vertex_size),          &c_vertex_size));
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_height),      &c_viewport_height));
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_width),       &c_viewport_width));
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_fragment_config_id),   &c_fragment_config_id));
-}
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_fragment_config_id),   &c_fragment_config_id));}
 
 static void __device_set_bin_raster_kernel_args(
     cl_kernel kernel,
@@ -1073,8 +1150,7 @@ static void __device_set_coarse_raster_kernel_args(
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_height),   &c_viewport_height));
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_width),    &c_viewport_width));
     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_width_bins),        &c_width_bins));
-    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_width_tiles),       &c_width_tiles));
-}
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_width_tiles),       &c_width_tiles));}
 
 static void __device_set_fragment_shader_kernel_args(
     cl_kernel kernel,
@@ -1240,7 +1316,8 @@ size_t device_create_program_from_binary(device_t* device, size_t size, const un
     cl_program program = device->programs[program_id];
     __device_shader_kernels_t* kernels = &device->shaders[program_id];
 
-    CL_ASSIGN_CHECK(kernels->vertex.kernel,         clCreateKernel(program, "gl_vertex_shader",             error));
+    CL_ASSIGN_CHECK(kernels->vertex.kernel_direct,  clCreateKernel(program, "vertex_shader_direct_kernel",  error));
+    CL_ASSIGN_CHECK(kernels->vertex.kernel_block,   clCreateKernel(program, "vertex_shader_block_kernel",   error));
     CL_ASSIGN_CHECK(kernels->fragment,              clCreateKernel(program, "fine_raster_single_sample",    error));
     CL_ASSIGN_CHECK(kernels->uniform_data,          clCreateKernel(program, "gl_uniform_data",              error));
     CL_ASSIGN_CHECK(kernels->vs_uniform_data,       clCreateKernel(program, "gl_vs_uniform_data",           error));
@@ -1404,33 +1481,6 @@ static cl_image_format __device_get_image_format_from_texture_mode(cl_uint textu
 
     return image_format;
 }
-
-/*
-static size_t device_create_renderbuffer(device_t* device, size_t width, size_t height, cl_uint texture_mode)
-{
-    size_t renderbuffer_id = device->renderbuffers_size;
-
-    #ifdef DEVICE_IMAGE_ENABLED
-    {
-        cl_image_format image_format = __device_get_image_format_from_texture_mode(texture_mode);
-        CL_ASSIGN_CHECK(device->renderbuffers[renderbuffer_id], 
-            clCreateImage2D(device->context, CL_MEM_READ_WRITE, &image_format, width, height, 0, NULL, error)
-        );
-    }
-    #else
-    {
-        size_t buffer_size = width * height * __device_get_bytes_from_texture_mode(texture_mode);
-        CL_ASSIGN_CHECK(device->renderbuffers[renderbuffer_id], 
-            clCreateBuffer(device->context, CL_MEM_READ_WRITE, buffer_size, NULL, error)
-        );
-    }
-    #endif
-
-    device->renderbuffers_size += 1;
-
-    return renderbuffer_id;
-}
-*/
 
 size_t device_create_ro_buffer(device_t* device, size_t size) 
 {
@@ -1612,40 +1662,98 @@ static void __device_print_triangle_assembly_output(
 
 //-------------------------------------------------------------------------------------
 
-void device_launch_vertex_shader(
+int device_snapshot_host_attributes(device_context_t* context, size_t shader_id, size_t num_vertices)
+{
+    size_t num_attributes = context->device->shaders[shader_id].vertex.number_attributes;
+    int    any_host = 0;
+
+    for (size_t attribute = 0; attribute < num_attributes; ++attribute)
+    {
+        __device_vertex_attribute_pointer_t* ap = &context->vertex_attribute_pointers[attribute];
+
+        if (!ap->is_host || ap->mem.host == NULL) continue;
+
+        size_t stride = ap->stride;
+        size_t bytes  = num_vertices * stride;
+        if (bytes == 0) continue;
+
+        any_host = 1;
+
+        __device_mem_t* snap = &context->host_attr_snapshot[attribute];
+
+        if (bytes > context->host_attr_snapshot_cap[attribute])
+        {
+            if (snap->mem) CL_CHECK(clReleaseMemObject(snap->mem));
+            CL_ASSIGN_CHECK(snap->mem, clCreateBuffer(context->device->context, CL_MEM_READ_ONLY, bytes, NULL, error));
+            context->host_attr_snapshot_cap[attribute] = bytes;
+        }
+
+        __device_write_mem(snap, CL_TRUE, 0, bytes, ap->mem.host);
+    }
+
+    return any_host;
+}
+
+void device_launch_vertex_shader_batched(
     device_context_t* context,
     size_t shader_id,
-    size_t init,
-    size_t end,
-    size_t offset,
-    size_t primitive_id,
-    int use_fragment_uniform
+    size_t vertex_offset,         // first (absolute) vertex of this run
+    size_t vertex_count,          // vertices in this run
+    size_t first_draw,            // first draw slot of this run
+    size_t num_draws,             // one-past-last draw slot of this run
+    size_t max_draw_vertices,
+    int block_mode,              // 0: direct kernel (1-draw run); 1: block kernel (multi-draw run)
+    int blocking_upload,
+    cl_event* out_upload_event,   // async only: receives the upload-completion event (else NULL)
+    const uint8_t*  arena,        // uniform base; uploads arena[first_draw .. first_draw+uniform_count)
+    size_t uniform_count,         // unique uniform blobs in this run (run_draws for direct/identity)
+    const vertex_attribute_data_t* attr_data_arena, // base; uploads [first_draw .. first_draw+vdata_count)
+    size_t vdata_count,           // unique attribute-data blobs in this run (run_draws for direct/identity)
+    const float (*vattrib_arena)[DEVICE_VERTEX_ATTRIBUTE_SIZE][4], // base; uploads [first_draw .. first_draw+vattrib_count)
+    size_t vattrib_count,         // unique default-attribute-value blobs in this run (run_draws for direct/identity)
+    const vertex_config_t* config,// base; uploads config[first_draw..num_draws) — per-draw arena ids
+    const uint32_t* draw_start    // base, absolute; uploads draw_start[first_draw..num_draws]
 ) {
-    if (init != 0) DEVICE_UNSUPORTED_MAPING();
+    if (vertex_count == 0 || num_draws <= first_draw) {
+        if (out_upload_event) *out_upload_event = NULL;
+        return;
+    }
+
+    cl_bool blk = blocking_upload ? CL_TRUE : CL_FALSE;
 
     cl_command_queue queue = __device_get_vertex_command_queue(context);
-    cl_kernel kernel = context->device->shaders[shader_id].vertex.kernel;
-    
-    size_t num_vertices = end - init;
-    size_t vertex_attribute_size = context->device->shaders[shader_id].vertex.number_attributes;
-    cl_mem  attribute_pointer_mems [DEVICE_VERTEX_ATTRIBUTE_SIZE];
-    
-    // Set kernel arguments and acquire pointers
 
+    __device_vertex_stage_wait(context, queue);
+
+    __device_vertex_shader_data_t* vs = &context->device->shaders[shader_id].vertex;
+    cl_kernel kernel = block_mode ? vs->kernel_block : vs->kernel_direct;
+
+    size_t vertex_attribute_size = vs->number_attributes;
+    cl_mem  attribute_pointer_mems [DEVICE_VERTEX_ATTRIBUTE_SIZE];
+
+    size_t run_draws    = num_draws - first_draw;
+    size_t attr_stride  = sizeof(vertex_attribute_data_t[DEVICE_VERTEX_ATTRIBUTE_SIZE]);
+    size_t vattrib_stride = sizeof(cl_float4[DEVICE_VERTEX_ATTRIBUTE_SIZE]);
+    cl_event* up_ev = (!blocking_upload && out_upload_event) ? out_upload_event : NULL;
+
+    CL_CHECK(clEnqueueWriteBuffer(queue, context->g_uniform_arena,          blk, first_draw * DEVICE_UNIFORM_CAPACITY, uniform_count * DEVICE_UNIFORM_CAPACITY, arena + first_draw * DEVICE_UNIFORM_CAPACITY, 0, NULL, NULL));
+    CL_CHECK(clEnqueueWriteBuffer(queue, context->g_attribute_data_arena,   blk, first_draw * attr_stride, vdata_count * attr_stride, attr_data_arena + first_draw * DEVICE_VERTEX_ATTRIBUTE_SIZE, 0, NULL, NULL));
+    CL_CHECK(clEnqueueWriteBuffer(queue, context->g_vertex_attribute_arena, blk, first_draw * vattrib_stride, vattrib_count * vattrib_stride, vattrib_arena + first_draw, 0, NULL, block_mode ? NULL : up_ev));
+    if (block_mode)
+    {
+        CL_CHECK(clEnqueueWriteBuffer(queue, context->g_config,           blk, first_draw * sizeof(vertex_config_t), run_draws * sizeof(vertex_config_t), config + first_draw, 0, NULL, NULL));
+        CL_CHECK(clEnqueueWriteBuffer(queue, context->g_draw_start,       blk, first_draw * sizeof(cl_uint), (run_draws + 1) * sizeof(cl_uint), draw_start + first_draw, 0, NULL, up_ev));
+    }
+    if (out_upload_event && !up_ev) *out_upload_event = NULL;
+
+    (void) max_draw_vertices;
     for (size_t attribute = 0; attribute < vertex_attribute_size; ++attribute)
     {
         __device_vertex_attribute_pointer_t *attribute_pointer = &context->vertex_attribute_pointers[attribute];
         cl_mem *pointer = &attribute_pointer_mems[attribute];
-        
+
         if (attribute_pointer->is_host) {
-            // high cost penalty, but we need to support that for compatibility with OpenGL
-            CL_ASSIGN_CHECK(*pointer, clCreateBuffer(
-                context->device->context,
-                CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                num_vertices * attribute_pointer->stride,
-                attribute_pointer->mem.host,
-                error
-            ));
+            *pointer = __device_acquire_mem(&context->host_attr_snapshot[attribute], queue);
         }
         else
         {
@@ -1654,64 +1762,71 @@ void device_launch_vertex_shader(
         }
     }
 
-    __device_mem_t* vertex_attributes         = &context->vertex_attributes_mem[context->vertex_attributes_index];
-    __device_mem_t* vertex_attribute_data     = &context->vertex_attribute_data_mem[context->vertex_attribute_data_index]; 
-    __device_mem_t* vertex_uniform            = &context->vertex_uniform_mem[context->vertex_uniform_index];
-
-    cl_mem vertex_uniform_mem;
-    // TODO: check savety of that operation
-    if (use_fragment_uniform)
+    #ifndef NDEBUG
     {
-        __device_acquire_mem(&context->fragment_uniform_mem, queue);
-
-        #ifdef DEVICE_SUBBUFFER_ENABLED
+        for (size_t attribute = 0; attribute < vertex_attribute_size; ++attribute)
         {
+            vertex_attribute_data_t vad = attr_data_arena[first_draw * DEVICE_VERTEX_ATTRIBUTE_SIZE + attribute];
+            if ((vad.misc & VERTEX_ATTRIBUTE_ACTIVE_POINTER) == 0) continue; // default-value path: no buffer read
 
-            cl_buffer_region buffer_region = {
-                .origin = DEVICE_UNIFORM_CAPACITY * primitive_id,
-                .size = DEVICE_UNIFORM_CAPACITY
-            };
-            CL_ASSIGN_CHECK(vertex_uniform_mem, clCreateSubBuffer(
-                context->fragment_uniform_mem.mem, CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION,
-                &buffer_region, error
-            ));
+            size_t comps    = gl_get_vertex_attribute_size(vad);
+            size_t draw_extent = block_mode ? max_draw_vertices : vertex_count;
+            if (draw_extent == 0) continue;
+            size_t max_read = (size_t) vad.offset + (draw_extent - 1) * (size_t) vad.stride + comps * 4u; // 4 = max bytes/component
+            size_t buf_size = 0;
+            CL_CHECK(clGetMemObjectInfo(attribute_pointer_mems[attribute], CL_MEM_SIZE, sizeof(buf_size), &buf_size, NULL));
+
+            if (max_read > buf_size)
+            {
+                printf("ATTR-OOB: inst=%zu attr=%zu active_ptr off=%u stride=%u comps=%zu draw_extent=%zu -> max_read=%zu > buf_size=%zu (is_host=%zu device_id=%zu)\n",
+                    first_draw, attribute, vad.offset, vad.stride, comps, draw_extent, max_read, buf_size,
+                    context->vertex_attribute_pointers[attribute].is_host,
+                    context->vertex_attribute_pointers[attribute].is_host ? (size_t) 0 : context->vertex_attribute_pointers[attribute].mem.device_id);
+            }
         }
-        #else
-        {
-            vertex_uniform_mem = context->fragment_uniform_mem.mem;
-        }
-        #endif
+    }
+    #endif
+
+    if (block_mode)
+    {
+        __device_set_vertex_shader_block_args(
+            kernel, context, vertex_attribute_size,
+            context->g_vertex_attribute_arena, // per-draw default attribute values, uploaded above
+            context->g_attribute_data_arena,   // per-draw attribute_data (offsets), uploaded above
+            context->g_uniform_arena,
+            context->g_draw_start,
+            context->g_config,
+            attribute_pointer_mems,
+            vertex_offset + vertex_count,  // c_num_vertices: vid guard (run-end vertex)
+            first_draw,                    // c_first_draw: run's first draw slot
+            num_draws,                     // c_num_draws: instance guard + sentinel index
+            vertex_offset                  // c_vertex_offset: draw-local base
+        );
     }
     else
     {
-        vertex_uniform_mem = __device_acquire_mem(vertex_uniform, queue);
+        __device_set_vertex_shader_direct_args(
+            kernel, context, vertex_attribute_size,
+            context->g_vertex_attribute_arena,
+            context->g_attribute_data_arena,
+            context->g_uniform_arena,
+            attribute_pointer_mems,
+            vertex_offset + vertex_count,  // c_num_vertices: vid guard
+            vertex_offset,                 // c_vertex_offset: draw-local base
+            config[first_draw]             // c_config: this draw's {vattrib,vdata,uniform} ids
+        );
     }
 
-    __device_set_vertex_shader_kernel_args(
-        kernel,
-        context,
-        vertex_attribute_size,
-        __device_acquire_mem(vertex_attributes,     queue),
-        __device_acquire_mem(vertex_attribute_data, queue),
-        vertex_uniform_mem,
-        attribute_pointer_mems,
-        num_vertices,
-        primitive_id
-    );
-
-    // Launch kernel
-
-    // size_t gw_offset = offset;
-    // size_t gw_size = num_vertices;
     size_t lws[] = {DEVICE_VERTEX_THREADS};
-    size_t gwo[] = {offset};
-    size_t gws[] = {lws[0] * ((num_vertices-1)/lws[0] + 1)};
+    size_t gwo[] = {0};
+    size_t gws[] = {lws[0] * ((vertex_count - 1)/lws[0] + 1)};
 
     cl_event wait_event;
-    
     #ifndef NDEBUG
     {
-        printf("%s: gwo={%zu}, gws={%zu}, lws={%zu}\n", __func__, gwo[0], gws[0], lws[0]);
+        printf("%s[%s]: gwo={%zu}, gws={%zu}, lws={%zu}, draws=[%zu,%zu), voff=%zu, vcnt=%zu\n",
+            __func__, block_mode ? "block" : "direct",
+            gwo[0], gws[0], lws[0], first_draw, num_draws, vertex_offset, vertex_count);
     }
     #endif
     CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, gwo, gws, lws, 0, NULL, &wait_event));
@@ -1720,16 +1835,18 @@ void device_launch_vertex_shader(
         CL_CHECK(clFinish(queue));
     }
     #endif
-    
+
+    __device_vertex_stage_publish(context, wait_event);
+
     // Release host pointers and synchronize device pointers
 
     for (size_t attribute = 0; attribute < vertex_attribute_size; ++attribute)
     {
         __device_vertex_attribute_pointer_t *attribute_pointer = &context->vertex_attribute_pointers[attribute];
 
-        if (attribute_pointer->is_host) 
+        if (attribute_pointer->is_host)
         {
-            CL_CHECK(clReleaseMemObject(attribute_pointer_mems[attribute]));
+            __device_barrier_mem(&context->host_attr_snapshot[attribute], wait_event);
         }
         else
         {
@@ -1738,25 +1855,9 @@ void device_launch_vertex_shader(
         }
     }
 
-    __device_barrier_mem(vertex_attributes,      wait_event);
-    __device_barrier_mem(vertex_attribute_data,  wait_event);
-
-    if (use_fragment_uniform)
-    {
-        #ifdef DEVICE_SUBBUFFER_ENABLED
-        {
-            CL_CHECK(clReleaseMemObject(vertex_uniform_mem));
-        }
-        #endif
-    }
-    else
-    {
-        __device_barrier_mem(vertex_uniform, wait_event);
-    }
-
     CL_CHECK(clReleaseEvent(wait_event));
 
-    // __device_print_vertex_shader_output(context, queue, num_vertices, /*num_varying=*/1);
+    // __device_print_vertex_shader_output(context, queue, total_vertices, /*num_varying=*/1);
 }
 
 void device_launch_range_triangle_assembly(
@@ -1769,8 +1870,12 @@ void device_launch_range_triangle_assembly(
 ) {
     cl_kernel kernel = context->device->triangle_setup_range_kernel;
 
+    if (num_triangles == 0) return;
+
     size_t qidx = __device_get_vertex_command_index(context);
     cl_command_queue queue = __device_get_vertex_command_queue(context);
+
+    __device_vertex_stage_wait(context, queue);
 
     cl_mem g_index_buffer;
     size_t index_bytes = sizeof(cl_ushort[size]);
@@ -1819,11 +1924,8 @@ void device_launch_range_triangle_assembly(
     }
     #endif
     CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, gwo, gws, lws, 0, NULL, &wait_event));
-    #ifndef NDEBUG
-    {
-        CL_CHECK(clFinish(queue));
-    }
-    #endif
+
+    __device_vertex_stage_publish(context, wait_event);
 
     if (index_buffer_to_device) __device_barrier_mem(index_mem, wait_event);
     else                        CL_CHECK(clReleaseMemObject(g_index_buffer));
@@ -1837,19 +1939,23 @@ void device_launch_range_triangle_assembly(
 }
 
 void device_launch_arrays_triangle_assembly(
-    device_context_t* context, 
+    device_context_t* context,
     size_t shader_id,
-    render_mode_t mode, 
-    size_t frag_config_id, 
-    size_t vertex_offset, 
-    size_t triangle_offset, 
+    render_mode_t mode,
+    size_t frag_config_id,
+    size_t vertex_offset,
+    size_t triangle_offset,
     size_t num_triangles,
-    size_t width, 
-    size_t height 
+    size_t width,
+    size_t height
 ) {
     cl_kernel kernel = context->device->triangle_setup_arrays_kernel;
 
+    if (num_triangles == 0) return;
+
     cl_command_queue queue = __device_get_vertex_command_queue(context);
+
+    __device_vertex_stage_wait(context, queue);
 
     __device_acquire_mem(&context->a_num_subtris,   queue);
 
@@ -1861,7 +1967,7 @@ void device_launch_arrays_triangle_assembly(
         mode,
         context->device->shaders[shader_id].vertex.vertex_size,
         frag_config_id,
-        height, 
+        height,
         width
     );
 
@@ -1877,18 +1983,106 @@ void device_launch_arrays_triangle_assembly(
     }
     #endif
     CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, gwo, gws, lws, 0, NULL, &wait_event));
-    #ifndef NDEBUG
-    {
-        CL_CHECK(clFinish(queue));
-    }
-    #endif
+
+    __device_vertex_stage_publish(context, wait_event);
 
     CL_CHECK(clEnqueueBarrierWithWaitList(context->raster_command_queue, 1, &wait_event, NULL));
     CL_CHECK(clReleaseEvent(wait_event));
 
     __device_advance_vertex_command_index(context);
- 
+
     // __device_print_triangle_assembly_output(context, queue, num_triangles);
+}
+
+static void __device_set_triangle_setup_arrays_block_kernel_args(
+    cl_kernel kernel,
+    device_context_t* context,
+    cl_uint c_first_draw,
+    cl_uint c_num_draws,
+    cl_uint c_vertex_size,
+    cl_uint c_viewport_height,
+    cl_uint c_viewport_width
+) {
+    cl_uint c_max_subtris = __device_get_max_number_subtriangles();
+    cl_uint c_samples_log2 = 0; // TODO: not impl
+    cl_mem  t_vertex_buffer = __device_get_texture_vertex_buffer(context);
+
+    cl_uint arg_idx = 0;
+
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),            &context->a_num_subtris));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),            &context->g_tri_header));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),            &context->g_tri_data));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),            &context->g_tri_subtris));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),            &t_vertex_buffer));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),            &context->g_setup_arena));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_first_draw),      &c_first_draw));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_num_draws),       &c_num_draws));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_max_subtris),     &c_max_subtris));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_samples_log2),    &c_samples_log2));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_vertex_size),     &c_vertex_size));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_height), &c_viewport_height));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(c_viewport_width),  &c_viewport_width));}
+
+void device_launch_arrays_triangle_assembly_block(
+    device_context_t* context,
+    size_t shader_id,
+    size_t first_draw,
+    size_t num_draws,
+    size_t width,
+    size_t height,
+    const setup_draw_config_t* setup_arena
+) {
+    if (num_draws <= first_draw) return;
+
+    size_t num_tris = setup_arena[num_draws].tri_start - setup_arena[first_draw].tri_start;
+    if (num_tris == 0) return;
+
+    cl_kernel kernel = context->device->triangle_setup_arrays_block_kernel;
+    cl_command_queue queue = __device_get_vertex_command_queue(context);
+
+    __device_vertex_stage_wait(context, queue);
+
+    __device_acquire_mem(&context->a_num_subtris, queue);
+
+    size_t run_draws = num_draws - first_draw;
+
+    CL_CHECK(clEnqueueWriteBuffer(
+        queue, context->g_setup_arena, CL_TRUE,
+        first_draw * sizeof(setup_draw_config_t),
+        (run_draws + 1) * sizeof(setup_draw_config_t),
+        setup_arena + first_draw, 0, NULL, NULL));
+
+    __device_set_triangle_setup_arrays_block_kernel_args(
+        kernel,
+        context,
+        first_draw,
+        num_draws,
+        context->device->shaders[shader_id].vertex.vertex_size,
+        height,
+        width
+    );
+
+    // Dense over the run's triangles; each lane binary-searches g_setup[].tri_start
+    // for its draw (gwo=0 — the kernel folds the run's tri_start offset itself).
+    size_t lws[] = {DEVICE_SETUP_THREADS};
+    size_t gws[] = {lws[0] * ((num_tris - 1)/lws[0] + 1)};
+
+    cl_event wait_event;
+
+    #ifndef NDEBUG
+    {
+        printf("%s: gws={%zu}, lws={%zu}, draws=[%zu,%zu), tris=%zu\n", __func__, gws[0], lws[0], first_draw, num_draws, num_tris);
+    }
+    #endif
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, gws, lws, 0, NULL, &wait_event));
+
+    // Reads g_setup_arena + g_vertex_buffer: gate the next vertex-stage launch.
+    __device_vertex_stage_publish(context, wait_event);
+
+    CL_CHECK(clEnqueueBarrierWithWaitList(context->raster_command_queue, 1, &wait_event, NULL));
+    CL_CHECK(clReleaseEvent(wait_event));
+
+    __device_advance_vertex_command_index(context);
 }
 
 void device_launch_bin_dispatch(
@@ -1931,7 +2125,7 @@ void device_launch_bin_dispatch(
             for(int stream_idx = 1; stream_idx < CR_BIN_STREAMS_SIZE; ++stream_idx) {
                 total += bin_total[bin_idx][stream_idx];
             }
-            printf("bin_total[%d]=%d\n", bin_idx, total);
+            if (total) printf("bin_total[%d]=%d\n", bin_idx, total);
             sum_bin_total += total;
         }
         printf("sum(bin_total)=%d\n", sum_bin_total);
@@ -1949,8 +2143,7 @@ void device_launch_bin_dispatch(
 
     __device_reset_vertex_command_index(context);
 
-    cl_int ZERO = 0;
-    __device_write_mem(&context->a_bin_counter,    CL_FALSE, 0, sizeof(cl_int), &ZERO);
+    __device_reset_mem(&context->a_bin_counter,    sizeof(cl_int), &ZERO);
 }
 
 void device_launch_tile_dispatch(
@@ -1970,7 +2163,7 @@ void device_launch_tile_dispatch(
         kernel,
         context,
         deferred_clear,
-        height, 
+        height,
         width
     );
 
@@ -2010,8 +2203,7 @@ void device_launch_tile_dispatch(
         }
     }
 
-    cl_int ZERO = 0;
-    __device_write_mem(&context->a_coarse_counter,    CL_FALSE, 0, sizeof(cl_int), &ZERO);
+    __device_reset_mem(&context->a_coarse_counter,    sizeof(cl_int), &ZERO);
 }
 
 void device_launch_fragment_shader(
@@ -2106,14 +2298,11 @@ void device_launch_fragment_shader(
     }
 
     // reset state
-    cl_uint max_number_triangles = __device_get_max_number_triangles();
-    cl_int ZERO = 0;
-    
-    __device_write_mem(&context->a_fine_counter,        CL_FALSE, 0, sizeof(cl_int), &ZERO);
-    __device_write_mem(&context->a_num_active_tiles,    CL_FALSE, 0, sizeof(cl_int), &ZERO);
-    __device_write_mem(&context->a_num_bin_segs,        CL_FALSE, 0, sizeof(cl_int), &ZERO);
-    __device_write_mem(&context->a_num_subtris,         CL_FALSE, 0, sizeof(cl_int), &max_number_triangles);
-    __device_write_mem(&context->a_num_tile_segs,       CL_FALSE, 0, sizeof(cl_int), &ZERO);
+    __device_reset_mem(&context->a_fine_counter,        sizeof(cl_int),  &ZERO);
+    __device_reset_mem(&context->a_num_active_tiles,    sizeof(cl_int),  &ZERO);
+    __device_reset_mem(&context->a_num_bin_segs,        sizeof(cl_int),  &ZERO);
+    __device_reset_mem(&context->a_num_subtris,         sizeof(cl_uint), &MAX_NUMBER_TRIANGLES);
+    __device_reset_mem(&context->a_num_tile_segs,       sizeof(cl_int),  &ZERO);
 }
 
 void device_launch_clear_framebuffer(
@@ -2203,45 +2392,6 @@ void device_launch_read_pixels(
     CL_ASSIGN_CHECK(map_ptr, clEnqueueMapBuffer(queue, buffer, CL_TRUE, CL_MAP_READ, 0, size, 0, NULL, NULL, error));
     // CL_CHECK(clEnqueueReadBuffer(queue, buffer, CL_TRUE, 0, size, ptr, 0, NULL, NULL));
     CL_CHECK(clReleaseMemObject(buffer));
-    /*
-    #ifdef DEVICE_IMAGE_ENABLED
-    {
-        size_t origin[3] = {x, y, 0};
-        size_t region[3] = {width, height, 1};
-        CL_CHECK(clEnqueueReadImage(
-            queue,
-            colorbuffer,
-            CL_TRUE,
-            origin,
-            region,
-            0,
-            0,
-            ptr,
-            0,
-            NULL,
-            NULL
-        ));
-    }
-    #else
-    {
-        size_t pixel_size = 4; // assuming RGBA8 for shared objects
-        size_t buffer_size = width * height * pixel_size;
-        size_t buffer_offset = (y * width + x) * pixel_size;
-
-        CL_CHECK(clEnqueueReadBuffer(
-            queue,
-            colorbuffer,
-            CL_TRUE,
-            buffer_offset,
-            buffer_size,
-            ptr,
-            0,
-            NULL,
-            NULL
-        ));
-    }
-    #endif
-    */
 }
 
 void device_wait_bin_queue(
@@ -2297,29 +2447,6 @@ void device_bind_texture_unit(device_context_t* context, size_t unit_index, size
 
 //-------------------------------------------------------------------------------------
 
-void device_copy_fragment_state(device_context_t* dst, device_context_t* src, size_t dst_id, size_t src_id)
-{
-    size_t sizeof_uniform = sizeof(cl_uchar[DEVICE_UNIFORM_CAPACITY]);
-
-    __device_copy_mem(
-        &src->fragment_uniform_mem,
-        &dst->fragment_uniform_mem,
-        sizeof_uniform * src_id,
-        sizeof_uniform * dst_id,
-        sizeof(cl_uchar[DEVICE_UNIFORM_CAPACITY])
-    );
-
-    size_t sizeof_rop_config = sizeof(rop_config_t);
-
-    __device_copy_mem(
-        &src->rop_configs_mem,
-        &dst->rop_configs_mem,
-        sizeof_rop_config * src_id,
-        sizeof_rop_config * dst_id,
-        sizeof(rop_config_t)
-    );
-}
-
 void device_copy_context_last_state(device_context_t* dst, device_context_t* src)
 {
     memcpy(dst->texture_units_ids, src->texture_units_ids, sizeof(src->texture_units_ids));
@@ -2328,49 +2455,17 @@ void device_copy_context_last_state(device_context_t* dst, device_context_t* src
     memcpy(dst->fragment_texture_samplers, src->fragment_texture_samplers, sizeof(src->fragment_texture_samplers));
     #endif
 
-    __device_write_mem(&dst->a_bin_counter,         CL_FALSE, 0, sizeof(ZERO), &ZERO);
-    __device_write_mem(&dst->a_coarse_counter,      CL_FALSE, 0, sizeof(ZERO), &ZERO);
-    __device_write_mem(&dst->a_fine_counter,        CL_FALSE, 0, sizeof(ZERO), &ZERO);
-    __device_write_mem(&dst->a_num_active_tiles,    CL_FALSE, 0, sizeof(ZERO), &ZERO);
-    __device_write_mem(&dst->a_num_bin_segs,        CL_FALSE, 0, sizeof(ZERO), &ZERO);
-    __device_write_mem(&dst->a_num_subtris,         CL_FALSE, 0, sizeof(max_number_triangles), &max_number_triangles);
-    __device_write_mem(&dst->a_num_tile_segs,       CL_FALSE, 0, sizeof(ZERO), &ZERO);
+    __device_reset_mem(&dst->a_bin_counter,         sizeof(ZERO), &ZERO);
+    __device_reset_mem(&dst->a_coarse_counter,      sizeof(ZERO), &ZERO);
+    __device_reset_mem(&dst->a_fine_counter,        sizeof(ZERO), &ZERO);
+    __device_reset_mem(&dst->a_num_active_tiles,    sizeof(ZERO), &ZERO);
+    __device_reset_mem(&dst->a_num_bin_segs,        sizeof(ZERO), &ZERO);
+    __device_reset_mem(&dst->a_num_subtris,         sizeof(MAX_NUMBER_TRIANGLES), &MAX_NUMBER_TRIANGLES);
+    __device_reset_mem(&dst->a_num_tile_segs,       sizeof(ZERO), &ZERO);
 
     dst->vertex_attribute_data_index = 0;
-    dst->vertex_attributes_index = 0;
     dst->vertex_uniform_index = 0;
 
-    __device_copy_mem(
-        &src->vertex_attribute_data_mem[src->vertex_attribute_data_index],
-        &dst->vertex_attribute_data_mem[dst->vertex_attribute_data_index],
-        0,
-        0,
-        sizeof(vertex_attribute_data_t[DEVICE_VERTEX_ATTRIBUTE_SIZE])
-    );
-
-    __device_copy_mem(
-        &src->vertex_attributes_mem[src->vertex_attributes_index],
-        &dst->vertex_attributes_mem[dst->vertex_attributes_index],
-        0,
-        0,
-        sizeof(float[DEVICE_VERTEX_ATTRIBUTE_SIZE][4])
-    );
-
-    __device_copy_mem(
-        &src->vertex_uniform_mem[src->vertex_uniform_index],
-        &dst->vertex_uniform_mem[dst->vertex_uniform_index],
-        0,
-        0,
-        sizeof(cl_uchar[DEVICE_UNIFORM_CAPACITY])
-    );
-
-    __device_copy_mem(
-        &src->fragment_texture_datas_mem,
-        &dst->fragment_texture_datas_mem,
-        0,
-        0,
-        sizeof(texture_data_t[DEVICE_TEXTURE_UNITS])
-    );
 }
 
 //-------------------------------------------------------------------------------------
@@ -2406,24 +2501,6 @@ device_event_t device_write_vertex_attribute_data(
     );
 }
 
-device_event_t device_write_vertex_attributes(
-    device_context_t* context,
-    float vertex_attributes[DEVICE_VERTEX_ATTRIBUTE_SIZE][4],
-    int blocking_write
-) {
-    context->vertex_attributes_index += 1;
-    context->vertex_attributes_index %= DEVICE_VERTEX_COMMAND_QUEUE_SIZE;
-
-    size_t idx = context->vertex_attributes_index;
-
-    return __device_write_mem(
-        &context->vertex_attributes_mem[idx],
-        blocking_write,
-        0,
-        sizeof(cl_float[DEVICE_VERTEX_ATTRIBUTE_SIZE][4]),
-        vertex_attributes
-    );
-}
 
 device_event_t device_write_vertex_uniform(
     device_context_t* context,

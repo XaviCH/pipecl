@@ -123,7 +123,8 @@ cl_ushort c_clear_enabled_data = 0;
 active_deferred_clear_t _deferred_clear;
 
 // Host State
-static uint8_t                      vertex_attibute_updated;
+static uint8_t                      _vertex_attributes_updated;
+static uint8_t                      _vertex_attribute_datas_updated;
 static float                    vertex_attributes           [DEVICE_VERTEX_ATTRIBUTE_SIZE][4];
 static vertex_attribute_data_t      vertex_attribute_datas      [DEVICE_VERTEX_ATTRIBUTE_SIZE];
 static vertex_attribute_binding_t   vertex_attribute_binding    [DEVICE_VERTEX_ATTRIBUTE_SIZE];
@@ -181,21 +182,24 @@ static void __context_constructor__()
 {
     orch_init(orch);
 
-    vertex_attibute_updated = 1;
-    for(size_t i = 0; i<DEVICE_VERTEX_ATTRIBUTE_SIZE; ++i) 
+    _vertex_attributes_updated      = 1;
+    _vertex_attribute_datas_updated = 1;
+    for(size_t attribute = 0; attribute < DEVICE_VERTEX_ATTRIBUTE_SIZE; ++attribute)
     {
-        vertex_attributes[i][0] = 0;
-        vertex_attributes[i][1] = 0;
-        vertex_attributes[i][2] = 0;
-        vertex_attributes[i][3] = 1;
-        vertex_attribute_datas[i].misc = 0;
+        vertex_attributes       [attribute][0]      = 0;
+        vertex_attributes       [attribute][1]      = 0;
+        vertex_attributes       [attribute][2]      = 0;
+        vertex_attributes       [attribute][3]      = 1;
+
+        vertex_attribute_datas  [attribute].misc    = 0;
     }
 
-    texture_unit_updated = 1;
     active_texture_unit = 0;
-    for (size_t i = 0; i < DEVICE_TEXTURE_UNITS; ++i) 
+
+    texture_unit_updated = 1;
+    for (size_t tunit = 0; tunit < DEVICE_TEXTURE_UNITS; ++tunit) 
     {
-        texture_unit_bindings[i] = 0;
+        texture_unit_bindings[tunit] = 0;
     }
 
     rop_config_updated = 1;
@@ -676,7 +680,7 @@ GL_APICALL void GL_APIENTRY glDisableVertexAttribArray (GLuint index)
 {
     if (index >= GL_MAX_VERTEX_ATTRIBS) SET_ERROR_AND_RETURN(GL_INVALID_VALUE);
 
-    vertex_attibute_updated = 1;
+    _vertex_attribute_datas_updated = 1;
     vertex_attribute_datas[index].misc &= ~VERTEX_ATTRIBUTE_ACTIVE_POINTER;
 }
 
@@ -684,31 +688,35 @@ static void write_gl_state_to_orch(GLenum draw_mode)
 {
     gl_framebuffer_t* framebuffer = gl_get_binded_framebuffer();
 
-    if (vertex_attibute_updated)
+    if (_vertex_attributes_updated)
     {
-        orch_write_vertex_attributes(orch, framebuffer->id, vertex_attributes);
+        orch_write_vertex_attributes(orch, vertex_attributes);
+        _vertex_attributes_updated = 0;
+    }
 
+    if (_vertex_attribute_datas_updated)
+    {
         orch_write_vertex_attribute_data(orch, framebuffer->id, vertex_attribute_datas);
 
-        for (size_t attribute=0; attribute < DEVICE_VERTEX_ATTRIBUTE_SIZE; ++attribute) 
+        for (size_t attribute=0; attribute < DEVICE_VERTEX_ATTRIBUTE_SIZE; ++attribute)
         {
-            vertex_attribute_binding_t *va_binding = &vertex_attribute_binding[attribute]; 
-            if (va_binding->binding != 0) 
+            vertex_attribute_binding_t *va_binding = &vertex_attribute_binding[attribute];
+            if (va_binding->binding != 0)
             {
                 gl_buffer_t *buffer = &_buffers[va_binding->binding-1];
                 orch_attach_vertex_attribute_ptr(orch, framebuffer->id, attribute, buffer->id);
-            } 
+            }
             else if (va_binding->pointer != NULL)
             {
                 vertex_attribute_data_t *va_data = &vertex_attribute_datas[attribute];
                 orch_attach_vertex_attribute_host_ptr(orch, framebuffer->id, attribute, va_data->stride, (void*) va_binding->pointer);
-            } 
+            }
             else
             {
                 orch_attach_vertex_attribute_ptr(orch, framebuffer->id, attribute, 0);
             }
         }
-        vertex_attibute_updated = 0;
+        _vertex_attribute_datas_updated = 0;
     }
 
     if (texture_unit_updated)
@@ -786,7 +794,7 @@ static void write_gl_state_to_orch(GLenum draw_mode)
     }
     else if (_vertex_uniform_data_updated)
     {
-        orch_write_vertex_data(orch, framebuffer->id, _programs[_current_program-1].uniform_data);
+        orch_write_vertex_data(orch, _programs[_current_program-1].uniform_data);
         _vertex_uniform_data_updated = 0;
     }
 }
@@ -851,7 +859,7 @@ GL_APICALL void GL_APIENTRY glEnableVertexAttribArray (GLuint index)
 {
     if (index >= DEVICE_VERTEX_ATTRIBUTE_SIZE) SET_ERROR_AND_RETURN(GL_INVALID_VALUE);
     
-    vertex_attibute_updated = 1;
+    _vertex_attribute_datas_updated = 1;
     vertex_attribute_datas[index].misc |= VERTEX_ATTRIBUTE_ACTIVE_POINTER;
 }
 
@@ -1833,9 +1841,10 @@ GL_APICALL void GL_APIENTRY glVertexAttribPointer (GLuint index, GLint size, GLe
 
     uint32_t is_buffer_bound = _buffer_binding;
 
-    vertex_attibute_updated = 1;
-    set_vertex_attribute(
-        &vertex_attribute_datas[index], 
+    _vertex_attribute_datas_updated = 1;
+
+    set_vertex_attribute_data(
+        &vertex_attribute_datas[index],
         is_buffer_bound ? (uintptr_t) pointer : 0, 
         stride, 
         va_type, 
@@ -2110,7 +2119,8 @@ static void gl_set_vertex_attribute(GLuint index, GLfloat x, GLfloat y, GLfloat 
 {
     if (index >= DEVICE_VERTEX_ATTRIBUTE_SIZE) SET_ERROR_AND_RETURN(GL_INVALID_VALUE);
 
-    vertex_attibute_updated = 1;
+    _vertex_attributes_updated = 1;
+
     vertex_attributes[index][0] = x;
     vertex_attributes[index][1] = y;
     vertex_attributes[index][2] = z;

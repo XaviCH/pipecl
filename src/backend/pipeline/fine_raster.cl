@@ -833,7 +833,7 @@ void fine_raster_single_sample(
             if (tri_read + get_sub_group_local_id() < tri_write)
             {
                 int idx = w_triangle_frag[(tri_read + get_sub_group_local_id()) % TRIANGLE_BUFFER_ELEMS] - frag_read;
-                if (idx <= get_sub_group_size())
+                if (idx >=1 && idx <= get_sub_group_size())
                     sg_temp->integer[idx - 1] = 1;
             }
             local_1dim_barrier(CLK_LOCAL_MEM_FENCE);

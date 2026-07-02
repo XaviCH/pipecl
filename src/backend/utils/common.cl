@@ -4,15 +4,36 @@
 #include <constants.device.h>
 #include <types.device.h>
 
-//-----------------------------------------------------------------------------
-
 // Those are always mapped into kernel dimensions.
-inline uint get_sub_group_local_id()    { return get_local_id(0);   }
-inline uint get_sub_group_id()          { return get_local_id(1);   }
-inline uint get_sub_group_size()        { return get_local_size(0); }
-inline uint get_num_sub_groups()        { return get_local_size(1); }
 
-// Utility functions
+#if __OPENCL_C_VERSION__ < 200
+
+static inline size_t get_local_linear_id() 
+{ 
+    return get_local_id(1) * get_local_size(0) + get_local_id(0); 
+}
+
+static inline size_t get_global_linear_id() 
+{ 
+    return (get_global_id(1) - get_global_offset(1)) * get_global_size(0) 
+        +  (get_global_id(0) - get_global_offset(0)); 
+}
+
+#endif
+
+static inline size_t get_local_linear_size() 
+{
+    return get_local_size(0) * get_local_size(1) * get_local_size(2); 
+}
+
+// TODO: rm this functions and wrapped around cl_khr_subgroup macro
+
+static inline uint get_sub_group_local_id()    { return get_local_id(0);   }
+static inline uint get_sub_group_id()          { return get_local_id(1);   }
+static inline uint get_sub_group_size()        { return get_local_size(0); }
+static inline uint get_num_sub_groups()        { return get_local_size(1); }
+
+// utility functions
 
 static inline uint ugetLo (ulong a) { return a & 0x00000000FFFFFFFFu; }
 static inline uint ugetHi (ulong a) { return a >> 32; }
@@ -59,26 +80,15 @@ static inline uint     prmt				(uint a, uint b, uint c)    {
 static inline int      slct_i              (int a, int b, int c)   { return (c >= 0) ? a : b; }
 static inline float    slct_f              (float a, float b, int c)   { return (c >= 0) ? a : b; }
 
-#if __OPENCL_VERSION__ < 200
-    static inline size_t get_local_linear_id() 
-    { 
-        return get_local_id(1) * get_local_size(0) + get_local_id(0); 
-    }
-
-    static inline size_t get_global_linear_id() 
-    { 
-        return (get_global_id(1) - get_global_offset(1)) * get_global_size(0) 
-            +  (get_global_id(0) - get_global_offset(0)); 
-    }
-#endif
-static inline size_t get_local_linear_size() 
+static inline uint idiv_fast(uint a, uint b)
 {
-    return get_local_size(0) * get_local_size(1) * get_local_size(2); 
+    return convert_uint_sat_rtn(((float)a + 0.5f) / (float)b);
 }
 
-// UTILS
 
-//------------------------------------------------------------------------
+
+// TODO: high dependence on 8x8 tiles
+// cover8x8
 
 static inline uint cover8x8_selectFlips(int dx, int dy) // 10 instr
 {
@@ -203,7 +213,7 @@ static inline ulong cover8x8_exact_fast(int ox, int oy, int dx, int dy, uint fli
 
     float xrcp  = 1.0f / (float) abs(slct_i(dx, dy, slctSwapXY));
     float yzero = det * yinitScale * xrcp + yinitBias;
-    long yinit = convert_long(slct_f(yzero, -yzero, slctFlipY));
+    long yinit = convert_long_rte(slct_f(yzero, -yzero, slctFlipY));
     uint yinc  = convert_uint_sat_rte((float)abs(slct_i(dy, dx, slctSwapXY)) * xrcp * yincScale);
 
     // Lookup.
@@ -211,110 +221,6 @@ static inline ulong cover8x8_exact_fast(int ox, int oy, int dx, int dy, uint fli
     return cover8x8_lookup_mask(yinit, yinc, flips, lut);
 }
 
-static inline uint idiv_fast(uint a, uint b)
-{
-    return convert_uint_sat_rtn(((float)a + 0.5f) / (float)b);
-}
 
-//------------------------------------------------------------------------
-// v0 = subpixels relative to the bottom-left sampling point
 
-static inline int float_to_bits(float value) { return *(int*) &value; }
-
-static inline uint3 setupPleq(float3 values, int2 v0, int2 d1, int2 d2, float areaRcp, int samplesLog2)
-{
-    float mx = fmax(fmax(values.x, values.y), values.z);
-    int sh = min(max((float_to_bits(mx) >> 23) - (127 + 22), 0), 8);
-    int t0 = (uint)values.x >> sh;
-    int t1 = ((uint)values.y >> sh) - t0;
-    int t2 = ((uint)values.z >> sh) - t0;
-    
-    uint rcpMant = (float_to_bits(areaRcp) & 0x007FFFFF) | 0x00800000;
-    int rcpShift = (23 + 127) - (float_to_bits(areaRcp) >> 23);
-
-    uint3 pleq;
-    long xc = ((long)t1 * d2.y - (long)t2 * d1.y) * rcpMant;
-    long yc = ((long)t2 * d1.x - (long)t1 * d2.x) * rcpMant;
-    pleq.x = (uint)(xc >> (rcpShift - (sh + CR_SUBPIXEL_LOG2 - samplesLog2)));
-    pleq.y = (uint)(yc >> (rcpShift - (sh + CR_SUBPIXEL_LOG2 - samplesLog2)));
-
-    int centerX = (v0.x * 2 + min_min(d1.x, d2.x, 0) + max_max(d1.x, d2.x, 0)) >> (CR_SUBPIXEL_LOG2 - samplesLog2 + 1);
-    int centerY = (v0.y * 2 + min_min(d1.y, d2.y, 0) + max_max(d1.y, d2.y, 0)) >> (CR_SUBPIXEL_LOG2 - samplesLog2 + 1);
-    int vcx = v0.x - (centerX << (CR_SUBPIXEL_LOG2 - samplesLog2));
-    int vcy = v0.y - (centerY << (CR_SUBPIXEL_LOG2 - samplesLog2));
-
-    pleq.z = t0 << sh;
-    pleq.z -= (uint)(((xc >> 13) * vcx + (yc >> 13) * vcy) >> (rcpShift - (sh + 13)));
-    pleq.z -= pleq.x * centerX + pleq.y * centerY;
-    return pleq;
-}
-
-//------------------------------------------------------------------------
-
-static inline int clipPolygonWithPlane(float* baryOut, const float* baryIn, int numIn, float v0, float v1, float v2)
-{
-    int numOut = 0;
-    if (numIn >= 3)
-    {
-        int ai = (numIn - 1) * 2;
-        float av = v0 + v1 * baryIn[ai + 0] + v2 * baryIn[ai + 1];
-        for (int bi = 0; bi < numIn * 2; bi += 2)
-        {
-            float bv = v0 + v1 * baryIn[bi + 0] + v2 * baryIn[bi + 1];
-            if (av * bv < 0.0f)
-            {
-                float bc = av / (av - bv);
-                float ac = 1.0f - bc;
-                baryOut[numOut + 0] = baryIn[ai + 0] * ac + baryIn[bi + 0] * bc;
-                baryOut[numOut + 1] = baryIn[ai + 1] * ac + baryIn[bi + 1] * bc;
-                numOut += 2;
-            }
-            if (bv >= 0.0f)
-            {
-                baryOut[numOut + 0] = baryIn[bi + 0];
-                baryOut[numOut + 1] = baryIn[bi + 1];
-                numOut += 2;
-            }
-            ai = bi;
-            av = bv;
-        }
-    }
-    return (numOut >> 1);
-}
-//------------------------------------------------------------------------
-// bary = &Vec2f[9] (output)
-// v0 = &Vec4f(clipPos0)
-// v1 = &Vec4f(clipPos1)
-// v2 = &Vec4f(clipPos2)
-// d1 = &Vec4f(clipPos1 - clipPos0)
-// d2 = &Vec4f(clipPos2 - clipPos0)
-
-static inline int clipTriangleWithFrustum(float* bary, const float4 v0, const float4 v1, const float4 v2, const float4 d1, const float4 d2)
-{
-    int num = 3;
-    bary[0] = 0.0f, bary[1] = 0.0f;
-    bary[2] = 1.0f, bary[3] = 0.0f;
-    bary[4] = 0.0f, bary[5] = 1.0f;
-
-    if ((v0.w < fabs(v0.x)) | (v1.w < fabs(v1.x)) | (v2.w < fabs(v2.x)))
-    {
-        float temp[18];
-        num = clipPolygonWithPlane(temp, bary, num, v0.w + v0.x, d1.w + d1.x, d2.w + d2.x);
-        num = clipPolygonWithPlane(bary, temp, num, v0.w - v0.x, d1.w - d1.x, d2.w - d2.x);
-    }
-    if ((v0.w < fabs(v0.y)) | (v1.w < fabs(v1.y)) | (v2.w < fabs(v2.y)))
-    {
-        float temp[18];
-        num = clipPolygonWithPlane(temp, bary, num, v0.w + v0.y, d1.w + d1.y, d2.w + d2.y);
-        num = clipPolygonWithPlane(bary, temp, num, v0.w - v0.y, d1.w - d1.y, d2.w - d2.y);
-    }
-    if ((v0.w < fabs(v0.z)) | (v1.w < fabs(v1.z)) | (v2.w < fabs(v2.z)))
-    {
-        float temp[18];
-        num = clipPolygonWithPlane(temp, bary, num, v0.w + v0.z, d1.w + d1.z, d2.w + d2.z);
-        num = clipPolygonWithPlane(bary, temp, num, v0.w - v0.z, d1.w - d1.z, d2.w - d2.z);
-    }
-    return num;
-}
-
-#endif
+#endif // BACKEND_UTILS_COMMON_CL

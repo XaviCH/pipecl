@@ -7,7 +7,8 @@
 typedef cl_event device_event_t;
 
 typedef struct {
-    cl_kernel kernel;
+    cl_kernel kernel_direct;   // single-draw
+    cl_kernel kernel_block;    // multi-draw
     uint32_t  number_attributes;
     uint32_t  vertex_size;
 } __device_vertex_shader_data_t;
@@ -71,6 +72,7 @@ typedef struct {
     cl_kernel                   coarse_raster_kernel;
     cl_kernel                   read_pixels_kernel;
     cl_kernel                   triangle_setup_arrays_kernel;
+    cl_kernel                   triangle_setup_arrays_block_kernel;
     cl_kernel                   triangle_setup_range_kernel;
 
     size_t                      programs_size;
@@ -99,10 +101,18 @@ typedef struct {
     device_t *device;
 
     // Buffers
-    cl_mem g_tri_header;        
+    cl_mem g_tri_header;
     cl_mem g_tri_data;
     cl_mem g_tri_subtris;
     cl_mem g_vertex_buffer;
+
+    cl_mem g_uniform_arena;
+    cl_mem g_attribute_data_arena;
+    cl_mem g_vertex_attribute_arena;
+    cl_mem g_draw_start;
+    cl_mem g_config;
+
+    cl_mem g_setup_arena;
 
     cl_mem g_bin_first_seg; 
     cl_mem g_bin_seg_data; 
@@ -136,15 +146,17 @@ typedef struct {
     __device_vertex_attribute_pointer_t     vertex_attribute_pointers  [DEVICE_VERTEX_ATTRIBUTE_SIZE];
     size_t                                  texture_units_ids          [DEVICE_TEXTURE_UNITS];
 
+    __device_mem_t                          host_attr_snapshot         [DEVICE_VERTEX_ATTRIBUTE_SIZE];
+    size_t                                  host_attr_snapshot_cap     [DEVICE_VERTEX_ATTRIBUTE_SIZE]; // bytes
+
     // Vertex async state
     // TODO: maybe unify into a OoO queue
     size_t                          vertex_command_queue_index;
     cl_command_queue                vertex_command_queues       [DEVICE_VERTEX_COMMAND_QUEUE_SIZE];
 
-    size_t                          vertex_attributes_index; 
-    __device_mem_t                  vertex_attributes_mem       [DEVICE_VERTEX_COMMAND_QUEUE_SIZE];     // sizeof(float[DEVICE_VERTEX_ATTRIBUTE_SIZE][4])
+    cl_event                        vertex_stage_event;
 
-    size_t                          vertex_attribute_data_index; 
+    size_t                          vertex_attribute_data_index;
     __device_mem_t                  vertex_attribute_data_mem   [DEVICE_VERTEX_COMMAND_QUEUE_SIZE];     // sizeof(vertex_attribute_data_t[DEVICE_VERTEX_ATTRIBUTE_SIZE])
 
     size_t                          vertex_uniform_index;
@@ -273,20 +285,31 @@ void device_bind_texture_unit(device_context_t* context, size_t unit_index, size
 
 // device context copiers
 
-void device_copy_fragment_state(device_context_t* dst, device_context_t* src, size_t dst_id, size_t src_id);
-
 void device_copy_context_last_state(device_context_t* dst, device_context_t* src);
 
 // device context work enqueuers
 
-void device_launch_vertex_shader(
+int device_snapshot_host_attributes(device_context_t* context, size_t shader_id, size_t num_vertices);
+
+void device_launch_vertex_shader_batched(
     device_context_t* context,
     size_t shader_id,
-    size_t init,
-    size_t end,
-    size_t offset,
-    size_t primitive_id,
-    int use_fragment_uniform
+    size_t vertex_offset,
+    size_t vertex_count,
+    size_t first_draw,
+    size_t num_draws,
+    size_t max_draw_vertices,
+    int block_mode,
+    int blocking_upload,
+    cl_event* out_upload_event,
+    const uint8_t*  arena,
+    size_t uniform_count,
+    const vertex_attribute_data_t* attr_data_arena,
+    size_t vdata_count,
+    const float (*vattrib_arena)[DEVICE_VERTEX_ATTRIBUTE_SIZE][4],
+    size_t vattrib_count,
+    const vertex_config_t* config,
+    const uint32_t* draw_start
 );
 
 void device_launch_range_triangle_assembly(
@@ -300,15 +323,25 @@ void device_launch_range_triangle_assembly(
 );
 
 void device_launch_arrays_triangle_assembly(
-    device_context_t* context, 
+    device_context_t* context,
     size_t shader_id,
-    render_mode_t mode, 
-    size_t frag_config_id, 
-    size_t vertex_offset, 
-    size_t triangle_offset, 
+    render_mode_t mode,
+    size_t frag_config_id,
+    size_t vertex_offset,
+    size_t triangle_offset,
     size_t num_triangles,
-    size_t width, 
-    size_t height 
+    size_t width,
+    size_t height
+);
+
+void device_launch_arrays_triangle_assembly_block(
+    device_context_t* context,
+    size_t shader_id,
+    size_t first_draw,
+    size_t num_draws,
+    size_t width,
+    size_t height,
+    const setup_draw_config_t* setup_arena   // base; uploads [first_draw, num_draws]
 );
 
 void device_launch_bin_dispatch(
@@ -367,12 +400,6 @@ device_event_t device_write_rop_config(
 device_event_t device_write_vertex_attribute_data(
     device_context_t* context,
     vertex_attribute_data_t vertex_attribute_data[DEVICE_VERTEX_ATTRIBUTE_SIZE]
-);
-
-device_event_t device_write_vertex_attributes(
-    device_context_t* context,
-    float vertex_attributes[DEVICE_VERTEX_ATTRIBUTE_SIZE][4],
-    int blocking_write
 );
 
 device_event_t device_write_vertex_uniform(

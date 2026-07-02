@@ -16,7 +16,7 @@
     #define NDEBUG
 #endif
 
-#define PERF_MODE 1
+#define DEVICE_PERF_MODE 0
 
 // -----------
 // device architecture description
@@ -38,7 +38,7 @@
 
 #define DEVICE_RW_IMAGE_SUPPORT 0 // if supported device can use read-write images
 
-#define DEVICE_POINTER_REINTERPRET_SUPPORT 0 // if supported a buffer pointer can be reinterpreted to another element type; disable for logical-SPIR-V drivers (e.g. clspv) that forbid pointer recasting
+#define DEVICE_POINTER_REINTERPRET_SUPPORT 1 // if supported a buffer pointer can be reinterpreted to another element type; disable for logical-SPIR-V drivers (e.g. clspv) that forbid pointer recasting
 
 #define DEVICE_BARRIER_SYNC_LOCAL_ATOMIC_SUPPORT 1
 
@@ -58,7 +58,7 @@
 
 #define DEVICE_ORCHESTRATOR_ENABLED 1
 
-#define DEVICE_CONTEXT_NUMBER 1
+#define DEVICE_CONTEXT_NUMBER 2
 
 #define DEVICE_BIN_QUEUE_SIZE 1
 
@@ -72,6 +72,10 @@
 
 #define TRIANGLE_PRIMITIVE_CONFIGS_LOG2 5
 #define DEVICE_VERTEX_COMMAND_QUEUE_SIZE 8
+
+#define DEVICE_MAX_BATCH_DRAWS 2048
+
+#define DEVICE_VERTEX_DIRECT_THRESHOLD 1024
 
 // max number of triangles could be rasterized
 #define DEVICE_MAX_NUMBER_TRIANGLES (1UL << 15) 

@@ -70,13 +70,11 @@ static size_t __orch_get_next_context_id(orch_handler_t* orch)
     return ret_value; 
 }
 
-static uint8_t __orch_require_flush_vertices(orch_framebuffer_handler_t* framebuffer, render_mode_t mode, uint32_t config_id)
+// TODO: check how flush vertices could be join in the new orch behaviour
+static uint8_t __orch_require_flush_vertices(orch_framebuffer_handler_t* framebuffer)
 {
-    if (is_render_mode_flag_triangle_fan(mode) || is_render_mode_flag_triangle_strip(mode)) return 1;
 
-    if (framebuffer->draw_state.last_render_mode.flags != mode.flags) return 1;
-
-    if (framebuffer->draw_state.last_config_id != config_id) return 1;
+    if (framebuffer->draw_state.pending_vertices == 0) return 0;
 
     return 0;
 }
@@ -102,10 +100,7 @@ static __orch_flush_context_reason_t __orch_require_flush_context(
     // TODO: depends also on the varying size
     if (framebuffer->draw_state.assembled_vertices + num_vertices > DEVICE_VERTICES_SIZE) return VERTEX_BUFFER_CAPACITY;
 
-    size_t pending_triangles = __orch_get_num_triangles_from_vertices(
-        framebuffer->draw_state.last_render_mode, 
-        framebuffer->draw_state.pending_vertices
-    );
+    size_t pending_triangles = framebuffer->draw_state.pending_triangles;
 
     size_t requested_triangles = __orch_get_num_triangles_from_vertices(mode, num_vertices);
 
@@ -151,32 +146,158 @@ static void __orch_attach_rw_image2d_stencilbuffer(orch_handler_t* orch, size_t 
 
 // Work functions
 
+static void __orch_set_direct_config(orch_handler_t* orch, size_t draw)
+{
+    orch->batch_config[draw] = (vertex_config_t)
+    {
+        .vattrib_id = (uint32_t) draw, 
+        .vdata_id   = (uint32_t) draw, 
+        .uniform_id = (uint32_t) draw 
+    };
+}
+
+typedef struct { 
+    size_t uniform_count; 
+    size_t vdata_count; 
+    size_t vattrib_count; 
+} orch_vs_upload_t;
+
+static orch_vs_upload_t __orch_build_vertex_config(
+    orch_handler_t* orch, 
+    size_t first_draw, 
+    size_t num_draws
+) {
+    size_t nu = 0, nv = 0, na = 0; // frontier offsets (last kept unique), relative to first_draw
+
+    for (size_t d = first_draw; d < num_draws; ++d)
+    {
+        if (d != first_draw &&
+            memcmp(orch->batch_arena[first_draw + nu], orch->batch_arena[d], DEVICE_UNIFORM_CAPACITY) != 0)
+        {
+            nu += 1;
+            if (first_draw + nu != d)
+                memcpy(orch->batch_arena[first_draw + nu], orch->batch_arena[d], DEVICE_UNIFORM_CAPACITY);
+        }
+        if (d != first_draw &&
+            memcmp(orch->batch_attr_data_arena[first_draw + nv], orch->batch_attr_data_arena[d], sizeof(orch->batch_current_attr_data)) != 0)
+        {
+            nv += 1;
+            if (first_draw + nv != d)
+                memcpy(orch->batch_attr_data_arena[first_draw + nv], orch->batch_attr_data_arena[d], sizeof(orch->batch_current_attr_data));
+        }
+        if (d != first_draw &&
+            memcmp(orch->batch_vertex_attributes_arena[first_draw + na], orch->batch_vertex_attributes_arena[d], sizeof(orch->batch_current_vertex_attributes)) != 0)
+        {
+            na += 1;
+            if (first_draw + na != d)
+                memcpy(orch->batch_vertex_attributes_arena[first_draw + na], orch->batch_vertex_attributes_arena[d], sizeof(orch->batch_current_vertex_attributes));
+        }
+        orch->batch_config[d] = (vertex_config_t){
+            .vattrib_id = (uint32_t) (first_draw + na),
+            .vdata_id   = (uint32_t) (first_draw + nv),
+            .uniform_id = (uint32_t) (first_draw + nu) };
+    }
+
+    return (orch_vs_upload_t){ nu + 1, nv + 1, na + 1 };
+}
+
 static void __orch_flush_vertices(orch_handler_t* orch, orch_framebuffer_handler_t* framebuffer)
 {
     if (framebuffer->draw_state.pending_vertices == 0) return;
 
-    size_t pending_triangles = __orch_get_num_triangles_from_vertices(
-        framebuffer->draw_state.last_render_mode, 
-        framebuffer->draw_state.pending_vertices
-    );
+    size_t pending_triangles = framebuffer->draw_state.pending_triangles;
 
     size_t vertices_offset = framebuffer->draw_state.assembled_vertices - framebuffer->draw_state.pending_vertices;
 
     device_context_t* context = __orch_get_attached_context(orch, framebuffer);
 
-    device_launch_arrays_triangle_assembly(
-        context,
-        framebuffer->draw_state.shader_id,
-        framebuffer->draw_state.last_render_mode,
-        framebuffer->draw_state.last_config_id,
-        vertices_offset,
-        framebuffer->draw_state.assembled_triangles,
-        pending_triangles,
-        framebuffer->width,
-        framebuffer->height
-    );
+    size_t run_draws  = orch->batch_num_draws - orch->batch_run_first_draw;
+    size_t run_first  = orch->batch_run_first_draw;
+
+    orch->batch_draw_start[orch->batch_num_draws] = (uint32_t) framebuffer->draw_state.assembled_vertices;
+
+    orch->batch_setup_config[orch->batch_num_draws].vertex_start = (uint32_t) framebuffer->draw_state.assembled_vertices;
+    orch->batch_setup_config[orch->batch_num_draws].tri_start    = (uint32_t) (framebuffer->draw_state.assembled_triangles + pending_triangles);
+
+    if (run_draws == 1)
+    {
+        __orch_set_direct_config(orch, orch->batch_run_first_draw);
+        device_launch_vertex_shader_batched(
+            context, framebuffer->draw_state.shader_id,
+            vertices_offset, framebuffer->draw_state.pending_vertices,
+            orch->batch_run_first_draw, orch->batch_num_draws, orch->batch_run_max_draw_verts,
+            0 /*direct*/, 0 /*async*/,
+            &orch->batch_upload_event[orch->batch_run_first_draw],
+            (const uint8_t*) orch->batch_arena, run_draws /*uniform_count*/,
+            orch->batch_attr_data_arena[0], run_draws /*vdata_count*/,
+            orch->batch_vertex_attributes_arena, run_draws /*vattrib_count*/,
+            orch->batch_config, orch->batch_draw_start
+        );
+    }
+    else if (orch->batch_run_max_draw_verts <= DEVICE_VERTEX_THREADS)
+    {
+        orch_vs_upload_t up = __orch_build_vertex_config(orch, orch->batch_run_first_draw, orch->batch_num_draws);
+        device_launch_vertex_shader_batched(
+            context, framebuffer->draw_state.shader_id,
+            vertices_offset, framebuffer->draw_state.pending_vertices,
+            orch->batch_run_first_draw, orch->batch_num_draws, orch->batch_run_max_draw_verts,
+            1 /*block*/, 1 /*blocking*/, NULL,
+            (const uint8_t*) orch->batch_arena, up.uniform_count,
+            orch->batch_attr_data_arena[0], up.vdata_count,
+            orch->batch_vertex_attributes_arena, up.vattrib_count,
+            orch->batch_config, orch->batch_draw_start
+        );
+    }
+    else
+    {
+        for (size_t d = orch->batch_run_first_draw; d < orch->batch_num_draws; ++d)
+        {
+            size_t d_offset = orch->batch_draw_start[d];
+            size_t d_count  = orch->batch_draw_start[d + 1] - d_offset;
+            __orch_set_direct_config(orch, d);
+            device_launch_vertex_shader_batched(
+                context, framebuffer->draw_state.shader_id,
+                d_offset, d_count, d, d + 1, d_count,
+                0 /*direct*/, 1 /*blocking*/, NULL,
+                (const uint8_t*) orch->batch_arena, 1 /*uniform_count*/,
+                orch->batch_attr_data_arena[0], 1 /*vdata_count*/,
+                orch->batch_vertex_attributes_arena, 1 /*vattrib_count*/,
+                orch->batch_config, orch->batch_draw_start
+            );
+        }
+    }
+
+    orch->batch_run_first_draw = orch->batch_num_draws;
+
+    if (run_draws == 1 || orch->batch_run_setup_flat)
+    {
+        device_launch_arrays_triangle_assembly(
+            context,
+            framebuffer->draw_state.shader_id,
+            framebuffer->draw_state.last_render_mode,
+            framebuffer->draw_state.last_config_id,
+            vertices_offset,
+            framebuffer->draw_state.assembled_triangles,
+            pending_triangles,
+            framebuffer->width,
+            framebuffer->height
+        );
+    }
+    else
+    {
+        device_launch_arrays_triangle_assembly_block(
+            context,
+            framebuffer->draw_state.shader_id,
+            run_first,
+            orch->batch_num_draws,
+            framebuffer->width,
+            framebuffer->height,
+            orch->batch_setup_config
+        );
+    }
 
     framebuffer->draw_state.pending_vertices = 0;
+    framebuffer->draw_state.pending_triangles = 0;
     framebuffer->draw_state.assembled_triangles += pending_triangles;
 }
 
@@ -184,8 +305,14 @@ static void __orch_flush_draw_state(orch_handler_t* orch, orch_framebuffer_handl
 {
     __orch_flush_vertices(orch, framebuffer);
 
+    framebuffer->draw_state.assembled_vertices = 0;
+    orch->batch_num_draws = 0;
+    orch->batch_run_max_draw_verts = 0;
+    orch->batch_run_first_draw = 0;
+    orch->batch_run_setup_flat = 0;
+
     if (framebuffer->draw_state.assembled_triangles == 0) return;
-    
+
     // printf("flushed state: assembled_triangles=%d\n", framebuffer->draw_state.assembled_triangles);
     uint32_t deferred_clear = __orch_get_deferred_clear(framebuffer);
 
@@ -221,7 +348,7 @@ static void __orch_flush_draw_state(orch_handler_t* orch, orch_framebuffer_handl
 static void __orch_flush_clear_state(orch_handler_t* orch, orch_framebuffer_handler_t* framebuffer)
 {
     if (framebuffer->clear_state.enabled.misc == 0) return;
-    
+
     device_launch_clear_framebuffer(
         &orch->device,
         framebuffer->clear_state.data,
@@ -262,8 +389,29 @@ static void __orch_deattach_context(orch_handler_t* orch, orch_framebuffer_handl
     }
 }
 
+static void __orch_reseed_fragment_config(
+    orch_framebuffer_handler_t* framebuffer,
+    device_context_t* context,
+    size_t dst_slot,
+    size_t src_slot
+) {
+    device_wait_event(framebuffer->fragment_uniform_write_event[dst_slot]);
+    device_wait_event(framebuffer->rop_config_write_event[dst_slot]);
+
+    if (dst_slot != src_slot)
+    {
+        memcpy(framebuffer->uniform_staging[dst_slot], framebuffer->uniform_staging[src_slot], DEVICE_UNIFORM_CAPACITY);
+        framebuffer->rop_config_staging[dst_slot] = framebuffer->rop_config_staging[src_slot];
+    }
+
+    framebuffer->fragment_uniform_write_event[dst_slot] =
+        device_write_fragment_uniform(context, dst_slot, framebuffer->uniform_staging[dst_slot]);
+    framebuffer->rop_config_write_event[dst_slot] =
+        device_write_rop_config(context, dst_slot, &framebuffer->rop_config_staging[dst_slot]);
+}
+
 static device_context_t* __orch_attach_new_context(
-    orch_handler_t* orch, 
+    orch_handler_t* orch,
     orch_framebuffer_handler_t* framebuffer,
     int move_fragment_data
 ) {
@@ -288,14 +436,21 @@ static device_context_t* __orch_attach_new_context(
 
     if (prev_context != NULL && context != NULL) { // context nullability is checked so compiler does no complain
 
-        if (context != prev_context) 
+        if (context != prev_context)
         {
             device_copy_context_last_state(context, prev_context);
-        } 
+
+            if (orch->batch_texture_data_valid)
+            {
+                device_wait_event(framebuffer->fragment_texture_data_write_event);
+                framebuffer->fragment_texture_data_write_event =
+                    device_write_fragment_texture_datas(context, orch->batch_current_texture_data);
+            }
+        }
 
         if (move_fragment_data && prev_loaded_configs > 0)
         {
-            device_copy_fragment_state(context, prev_context, framebuffer->loaded_configs, prev_loaded_configs - 1);
+            __orch_reseed_fragment_config(framebuffer, context, framebuffer->loaded_configs, prev_loaded_configs - 1);
             framebuffer->loaded_configs += 1;
         }
     }
@@ -306,50 +461,15 @@ static device_context_t* __orch_attach_new_context(
     return context;
 }
 
-/*
-static uint8_t orch_require_flush_clear(orch_framebuffer_handler_t* framebuffer, clear_data_t data, enabled_data_t enabled)
-{
-    uint32_t red_enabled = get_enabled_red_data(framebuffer->clear_state.enabled) && get_enabled_red_data(enabled);
-    uint32_t red_diff = get_rgba8_red(framebuffer->clear_state.data.color) !=  get_rgba8_red(data.color); 
-    
-    if (red_enabled && red_diff) return 1;
-
-    uint32_t green_enabled = get_enabled_green_data(framebuffer->clear_state.enabled) && get_enabled_green_data(enabled);
-    uint32_t green_diff = get_rgba8_green(framebuffer->clear_state.data.color) !=  get_rgba8_green(data.color);
-    
-    if (green_enabled && green_diff) return 1;
-
-    uint32_t blue_enabled = get_enabled_blue_data(framebuffer->clear_state.enabled) && get_enabled_blue_data(enabled);
-    uint32_t blue_diff = get_rgba8_blue(framebuffer->clear_state.data.color) !=  get_rgba8_blue(data.color);
-    
-    if (blue_enabled && blue_diff) return 1;
-
-    uint32_t alpha_enabled = get_enabled_alpha_data(framebuffer->clear_state.enabled) && get_enabled_alpha_data(enabled);
-    uint32_t alpha_diff = get_rgba8_alpha(framebuffer->clear_state.data.color) !=  get_rgba8_alpha(data.color);
-    
-    if (alpha_enabled && alpha_diff) return 1;
-
-    uint32_t depth_enabled = get_enabled_depth_data(framebuffer->clear_state.enabled) && get_enabled_depth_data(enabled);
-    uint32_t depth_diff = framebuffer->clear_state.data.depth.misc != framebuffer->clear_state.data.depth.misc;
-    
-    if (depth_enabled && depth_diff) return 1;
-
-    uint32_t stencil_enabled = get_enabled_stencil_data(framebuffer->clear_state.enabled) && get_enabled_stencil_data(enabled);
-    uint32_t stencil_diff = framebuffer->clear_state.data.stencil.misc !=  framebuffer->clear_state.data.stencil.misc;
-    
-    if (stencil_enabled && stencil_diff) return 1;
-
-    return 0;
-}
-*/
-
 static void __orch_draw_vertices(
     orch_handler_t* orch,
     orch_framebuffer_handler_t* framebuffer,
     size_t shader_id,
     render_mode_t mode,
     uint32_t init,
-    uint32_t end
+    uint32_t end,
+    int is_range_draw   // 1: caller (orch_draw_range) launches the vertex shader itself
+                        // immediately, so do not auto-flush this recorded draw here
 ) {
     size_t num_vertices = end - init;
     size_t num_triangles = __orch_get_num_triangles_from_vertices(mode, num_vertices);
@@ -372,28 +492,65 @@ static void __orch_draw_vertices(
         }
     }
 
+    if (orch->batch_num_draws >= DEVICE_MAX_BATCH_DRAWS)
+    {
+        __orch_flush_draw_state(orch, framebuffer);
+        context = __orch_get_attached_or_attach_context(orch, framebuffer);
+    }
+
     size_t last_config_id = framebuffer->loaded_configs - 1;
 
-    if (__orch_require_flush_vertices(framebuffer, mode, last_config_id))
+    if (__orch_require_flush_vertices(framebuffer))
     {
         __orch_flush_vertices(orch, framebuffer);
     }
 
-    device_launch_vertex_shader(
-        context,
-        shader_id,
-        init,
-        end,
-        framebuffer->draw_state.assembled_vertices,
-        last_config_id,
-        !framebuffer->use_vertex_uniform
-    );
+    int draw_has_host_attr = device_snapshot_host_attributes(context, shader_id, num_vertices);
+
+    uint8_t is_triangles = !is_render_mode_flag_triangle_fan(mode) && !is_render_mode_flag_triangle_strip(mode);
+
+    if (framebuffer->draw_state.pending_vertices == 0)
+    {
+        orch->batch_run_max_draw_verts = 0;
+        framebuffer->draw_state.pending_triangles = 0;
+        orch->batch_run_setup_flat = is_triangles;
+    }
+    else
+    {
+        orch->batch_run_setup_flat = orch->batch_run_setup_flat && is_triangles
+            && mode.flags     == framebuffer->draw_state.last_render_mode.flags
+            && last_config_id == framebuffer->draw_state.last_config_id;
+    }
+
+    size_t slot = orch->batch_num_draws;
+    size_t draw_first_vertex = framebuffer->draw_state.assembled_vertices;
+
+    device_wait_event(orch->batch_upload_event[slot]);
+    orch->batch_upload_event[slot] = NULL;
+    memcpy(orch->batch_arena[slot], orch->batch_current_uniform, DEVICE_UNIFORM_CAPACITY);
+    memcpy(orch->batch_attr_data_arena[slot], orch->batch_current_attr_data, sizeof(orch->batch_current_attr_data));
+    memcpy(orch->batch_vertex_attributes_arena[slot], orch->batch_current_vertex_attributes, sizeof(orch->batch_current_vertex_attributes));
+    orch->batch_draw_start[slot] = (uint32_t) draw_first_vertex;
+    orch->batch_setup_config[slot] = (setup_draw_config_t) {
+        .vertex_start     = (uint32_t) draw_first_vertex,
+        .tri_start        = (uint32_t) (framebuffer->draw_state.assembled_triangles + framebuffer->draw_state.pending_triangles),
+        .render_mode      = mode.flags,
+        .primitive_config = (uint32_t) last_config_id,
+    };
+    orch->batch_num_draws += 1;
+    if (num_vertices > orch->batch_run_max_draw_verts) orch->batch_run_max_draw_verts = num_vertices;
 
     framebuffer->draw_state.last_render_mode = mode;
     framebuffer->draw_state.last_config_id = last_config_id;
     framebuffer->draw_state.assembled_vertices += num_vertices;
     framebuffer->draw_state.pending_vertices += num_vertices;
+    framebuffer->draw_state.pending_triangles += num_triangles;
     framebuffer->draw_state.shader_id = shader_id;
+
+    if (!is_range_draw && (num_vertices >= DEVICE_VERTEX_DIRECT_THRESHOLD || draw_has_host_attr))
+    {
+        __orch_flush_vertices(orch, framebuffer);
+    }
 }
 
 static void __orch_merge_clear_state(orch_framebuffer_handler_t* framebuffer, clear_data_t data, enabled_data_t enabled)
@@ -452,6 +609,18 @@ void orch_init(orch_handler_t* orch)
     orch->next_context_id = 0;
     orch->framebuffer_size = 0;
     orch->rw_image2d_size = 0;
+
+    orch->batch_num_draws = 0;
+    orch->batch_run_max_draw_verts = 0;
+    orch->batch_run_first_draw = 0;
+    orch->batch_run_setup_flat = 0;
+    orch->batch_texture_data_valid = 0;
+    memset(orch->batch_current_texture_data, 0, sizeof(orch->batch_current_texture_data));
+    memset(orch->batch_current_uniform, 0, DEVICE_UNIFORM_CAPACITY);
+    memset(orch->batch_current_attr_data, 0, sizeof(orch->batch_current_attr_data));
+    memset(orch->batch_current_vertex_attributes, 0, sizeof(orch->batch_current_vertex_attributes));
+    memset(orch->batch_attr_buffer, 0, sizeof(orch->batch_attr_buffer));
+    for (size_t i = 0; i < DEVICE_MAX_BATCH_DRAWS; ++i) orch->batch_upload_event[i] = NULL;
 
     device_init(&orch->device);
 
@@ -601,25 +770,33 @@ void orch_attach_texture_stencilbuffer(orch_handler_t* orch, size_t framebuffer_
 
 void orch_attach_vertex_attribute_ptr(orch_handler_t* orch, size_t framebuffer_id, uint32_t attribute, size_t buffer_id)
 {
+    if (orch->batch_attr_buffer[attribute] == buffer_id + 1) return;
+
     orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
+
+    __orch_flush_vertices(orch, framebuffer);
 
     device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
 
     device_bind_buffer_to_vertex_attribute_pointer(context, attribute, buffer_id);
+    orch->batch_attr_buffer[attribute] = buffer_id + 1;
 }
 
 void orch_attach_vertex_attribute_host_ptr(
-    orch_handler_t* orch, 
-    size_t framebuffer_id, 
-    uint32_t attribute, 
-    size_t stride, 
+    orch_handler_t* orch,
+    size_t framebuffer_id,
+    uint32_t attribute,
+    size_t stride,
     void* ptr
 ) {
     orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
 
+    __orch_flush_vertices(orch, framebuffer);
+
     device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
 
     device_bind_host_pointer_to_vertex_attribute_pointer(context, attribute, stride, ptr);
+    orch->batch_attr_buffer[attribute] = 0; // host binding: force the next device bind to re-flush
 }
 
 void orch_attach_texture_unit(
@@ -686,29 +863,23 @@ void orch_generate_mipmap(orch_handler_t* orch, size_t texture_id, size_t levels
 }
 
 void orch_write_vertex_attributes(
-    orch_handler_t* orch, 
-    size_t framebuffer_id, 
+    orch_handler_t* orch,
     float vertex_attributes[DEVICE_VERTEX_ATTRIBUTE_SIZE][4]
 ) {
-    orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
-
-    device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
-
-    device_wait_event(framebuffer->vertex_attributes_write_event);
-    framebuffer->vertex_attributes_write_event = device_write_vertex_attributes(context, vertex_attributes, 0);
+    memcpy(orch->batch_current_vertex_attributes, vertex_attributes, sizeof(orch->batch_current_vertex_attributes));
 }
 
 void orch_write_vertex_attribute_data(
-    orch_handler_t* orch, 
-    size_t framebuffer_id, 
+    orch_handler_t* orch,
+    size_t framebuffer_id,
     vertex_attribute_data_t* data
 ) {
-    orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
+    (void) framebuffer_id;
 
-    device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
-
-    device_wait_event(framebuffer->vertex_attribute_data_write_event);
-    framebuffer->vertex_attribute_data_write_event = device_write_vertex_attribute_data(context, data);
+    // Per-draw cache (like the uniform blob): the snapshot into the arena slot
+    // happens at draw-record time, so a per-draw attribute offset change (text
+    // glyphs indexing one shared VBO) does NOT end the run.
+    memcpy(orch->batch_current_attr_data, data, sizeof(orch->batch_current_attr_data));
 }
 
 void orch_write_fragment_texture_data(
@@ -722,7 +893,12 @@ void orch_write_fragment_texture_data(
 
     __orch_flush_draw_state(orch, framebuffer);
 
-    device_event_t write_event = device_write_fragment_texture_datas(context, texture_data);
+    device_wait_event(framebuffer->fragment_texture_data_write_event);
+    framebuffer->fragment_texture_data_write_event = NULL;
+    memcpy(orch->batch_current_texture_data, texture_data, sizeof(orch->batch_current_texture_data));
+    orch->batch_texture_data_valid = 1;
+
+    device_event_t write_event = device_write_fragment_texture_datas(context, orch->batch_current_texture_data);
     device_wait_event(write_event);
 }
 
@@ -754,24 +930,15 @@ void orch_write_fragment_data(
     framebuffer->use_vertex_uniform = 0;
 
     framebuffer->loaded_configs += 1;
+
+    memcpy(orch->batch_current_uniform, uniform_data, DEVICE_UNIFORM_CAPACITY);
 }
 
 void orch_write_vertex_data(
     orch_handler_t* orch,
-    size_t framebuffer_id,
     uint8_t uniform_data[DEVICE_UNIFORM_CAPACITY]
 ) {
-    orch_framebuffer_handler_t* framebuffer = __orch_get_framebuffer_from_id(orch, framebuffer_id);
-
-    device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
-
-    size_t slot = framebuffer->vertex_uniform_staging_slot;
-    device_wait_event(framebuffer->vertex_uniform_write_event[slot]);
-    memcpy(framebuffer->vertex_uniform_staging[slot], uniform_data, DEVICE_UNIFORM_CAPACITY);
-    framebuffer->vertex_uniform_write_event[slot] = device_write_vertex_uniform(context, framebuffer->vertex_uniform_staging[slot], 0);
-    framebuffer->vertex_uniform_staging_slot = (slot + 1) % DEVICE_VERTEX_COMMAND_QUEUE_SIZE;
-
-    framebuffer->use_vertex_uniform = 1;
+    memcpy(orch->batch_current_uniform, uniform_data, DEVICE_UNIFORM_CAPACITY);
 }
 
 // Work functions
@@ -788,7 +955,7 @@ void orch_draw_arrays(
 
     device_sync_count_draw();
 
-    __orch_draw_vertices(orch, framebuffer, shader_id, mode, init, end);
+    __orch_draw_vertices(orch, framebuffer, shader_id, mode, init, end, 0 /*array draw*/);
 
     #if (DEVICE_ORCHESTRATOR_ENABLED == 0)
     {
@@ -811,7 +978,9 @@ void orch_draw_range(
 
     device_sync_count_draw();
 
-    __orch_draw_vertices(orch, framebuffer, shader_id, mode, init, end);
+    __orch_flush_vertices(orch, framebuffer);
+
+    __orch_draw_vertices(orch, framebuffer, shader_id, mode, init, end, 1 /*range draw: launched below*/);
 
     if (framebuffer->draw_state.pending_vertices == 0) return;
 
@@ -823,6 +992,25 @@ void orch_draw_range(
     size_t vertices_offset = framebuffer->draw_state.assembled_vertices - framebuffer->draw_state.pending_vertices;
 
     device_context_t* context = __orch_get_attached_or_attach_context(orch, framebuffer);
+
+    __orch_set_direct_config(orch, orch->batch_num_draws - 1);
+    device_launch_vertex_shader_batched(
+        context,
+        framebuffer->draw_state.shader_id,
+        vertices_offset,
+        framebuffer->draw_state.pending_vertices,
+        orch->batch_num_draws - 1,
+        orch->batch_num_draws,
+        orch->batch_run_max_draw_verts,
+        0, // direct: a range draw is its own single-draw run
+        0, // async: per-draw upload, made safe by the per-slot reuse wait above
+        &orch->batch_upload_event[orch->batch_num_draws - 1],
+        (const uint8_t*) orch->batch_arena, 1 /*uniform_count*/,
+        orch->batch_attr_data_arena[0], 1 /*vdata_count*/,
+        orch->batch_vertex_attributes_arena, 1 /*vattrib_count*/,
+        orch->batch_config, orch->batch_draw_start
+    );
+    orch->batch_run_first_draw = orch->batch_num_draws;
 
     device_launch_range_triangle_assembly(
         context,
@@ -839,6 +1027,7 @@ void orch_draw_range(
     );
 
     framebuffer->draw_state.pending_vertices = 0;
+    framebuffer->draw_state.pending_triangles = 0;
     framebuffer->draw_state.assembled_triangles += pending_triangles;
 
     #if (DEVICE_ORCHESTRATOR_ENABLED == 0)

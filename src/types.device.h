@@ -17,6 +17,8 @@ typedef int     cl_int;
 typedef uint    cl_uint;
 typedef uint2   cl_uint2;
 typedef uint4   cl_uint4;
+typedef float   cl_float;
+typedef float4  cl_float4;
 typedef ulong   cl_ulong;
 typedef ulong2   cl_ulong2;
 #else
@@ -88,6 +90,21 @@ typedef enum
     FRONT = 0,
     BACK = 1
 } face_t;
+
+typedef struct
+{
+    cl_uint vertex_start;
+    cl_uint tri_start;
+    cl_uint render_mode;
+    cl_uint primitive_config;
+} setup_draw_config_t;
+
+typedef struct
+{
+    cl_uint vattrib_id;
+    cl_uint vdata_id;
+    cl_uint uniform_id;
+} vertex_config_t;
 
 // triangle header misc type
 // stores metadata related with the primitive
@@ -199,6 +216,9 @@ typedef struct
     unsigned int misc; // size[3], type[3], normalized[1], vertex_attrib_pointer_active[1]
 } vertex_attribute_data_t;
 
+typedef vertex_attribute_data_t vertex_attribute_data_array_t [DEVICE_VERTEX_ATTRIBUTE_SIZE];
+typedef cl_float4               vertex_attribute_value_array_t[DEVICE_VERTEX_ATTRIBUTE_SIZE];
+
 static inline cl_uint gl_get_vertex_attribute_type(vertex_attribute_data_t va_data)
 {
     return va_data.misc & VERTEX_ATTRIBUTE_TYPE_MASK;
@@ -248,7 +268,7 @@ static inline void set_vertex_attribute_pointer(vertex_attribute_data_t *va_data
     }
 }
 
-static void set_vertex_attribute(
+static void set_vertex_attribute_data(
     vertex_attribute_data_t *va_data, 
     cl_uint offset, 
     cl_uint stride, 
